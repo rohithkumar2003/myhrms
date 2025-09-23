@@ -1,0 +1,17 @@
+# Node / React
+frontend/node_modules/
+frontend/build/
+frontend/.env
+
+# Java / Spring Boot
+backend/target/
+backend/.classpath
+backend/.project
+backend/.settings/
+backend/.idea/
+backend/*.iml
+backend/.env
+
+# MacOS / Windows
+.DS_Store
+Thumbs.db
