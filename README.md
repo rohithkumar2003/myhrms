@@ -134,7 +134,19 @@ For any issues with CORS, ensure backend allows requests from frontend port.
 
 Screenshots / Demo
 ------------------------
+**Attendance Page**
+![attendance](images/attendance.png)
+**Holiday Calender**
+![HolidayCalender](images/holidaycalender.png)
 
+**Leave Summary**
+![leavesummary](images/leavesummary.png)
+
+**Punchin of Employee**
+![punchin](images/punchin.png)
+
+**Overtime Details**
+![overtime](images/overtime.png)
 
 
 
