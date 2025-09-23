@@ -2,6 +2,7 @@
 
 
 A **full-featured HRMS** to manage employees’ attendance, leaves, notices, holidays, and automated email notifications. Enables admins to efficiently manage employee information and employees to stay updated.
+(PLEASE REVIEW THE IMAGES ATTACHED AT THE END OF THIS FILE)
 
 ---
 
