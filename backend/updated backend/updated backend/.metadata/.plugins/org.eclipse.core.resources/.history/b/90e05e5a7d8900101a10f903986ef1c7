@@ -1,0 +1,23 @@
+package com.example.demo.config;
+
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import com.example.demo.service.BirthdayEmailService;
+
+import lombok.RequiredArgsConstructor;
+
+@Component
+@EnableScheduling
+@RequiredArgsConstructor
+public class BirthdayEmailScheduler {
+
+    private final BirthdayEmailService birthdayEmailService;
+
+    // Runs every day at 9:00 AM
+    @Scheduled(cron = "0 15 4 4 9 ? ")
+    public void sendBirthdayEmailsDaily() {
+        birthdayEmailService.sendBirthdayEmails();
+    }
+}

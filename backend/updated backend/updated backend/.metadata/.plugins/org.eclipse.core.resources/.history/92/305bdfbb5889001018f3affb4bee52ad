@@ -1,0 +1,39 @@
+package com.example.demo.controller;
+
+import com.example.demo.service.ForgotPasswordService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/auth")
+@RequiredArgsConstructor
+public class ForgotPasswordController {
+
+    private final ForgotPasswordService forgotPasswordService;
+
+    // Step 1: Send OTP
+    @PostMapping("/forgot-password")
+    public ResponseEntity<String> forgotPassword(@RequestParam String email) {
+        String otp = forgotPasswordService.sendOtp(email);
+        return ResponseEntity.ok("OTP generated and sent (check logs). OTP: " + otp);
+    }
+
+    // Step 2: Verify OTP
+    @PostMapping("/verify-otp")
+    public ResponseEntity<String> verifyOtp(@RequestParam String email, @RequestParam String otp) {
+        boolean valid = forgotPasswordService.verifyOtp(email, otp);
+        if (valid) {
+            return ResponseEntity.ok("OTP verified successfully");
+        } else {
+            return ResponseEntity.badRequest().body("Invalid OTP");
+        }
+    }
+
+    // Step 3: Reset Password
+    @PostMapping("/reset-password")
+    public ResponseEntity<String> resetPassword(@RequestParam String email, @RequestParam String newPassword) {
+        forgotPasswordService.resetPassword(email, newPassword);
+        return ResponseEntity.ok("Password reset successfully");
+    }
+}

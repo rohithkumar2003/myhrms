@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<qualifiedTypeNameHistroy>
+    <fullyQualifiedTypeName name="jakarta.persistence.Table"/>
+    <fullyQualifiedTypeName name="jakarta.persistence.Id"/>
+    <fullyQualifiedTypeName name="java.util.Optional"/>
+    <fullyQualifiedTypeName name="com.example.demo.model.Role"/>
+    <fullyQualifiedTypeName name="com.example.demo.model.User"/>
+    <fullyQualifiedTypeName name="javax.management.relation.Role"/>
+    <fullyQualifiedTypeName name="org.hibernate.validator.internal.util.stereotypes.Lazy"/>
+    <fullyQualifiedTypeName name="org.apache.tomcat.util.net.openssl.ciphers.Authentication"/>
+    <fullyQualifiedTypeName name="com.example.demo.model.UserRole"/>
+    <fullyQualifiedTypeName name="com.example.demo.model.Notification"/>
+</qualifiedTypeNameHistroy>

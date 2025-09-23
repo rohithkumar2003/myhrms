@@ -1,0 +1,87 @@
+package com.example.demo.controller;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.example.demo.model.Role;
+import com.example.demo.model.User;
+import com.example.demo.repository.UserRepository;
+import com.example.demo.security.JwtUtil;
+import com.example.demo.service.CustomUserDetailsService;
+
+import lombok.RequiredArgsConstructor;
+
+@RestController
+@RequestMapping("/api/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final AuthenticationManager authenticationManager;
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtUtil jwtUtil;
+    private final CustomUserDetailsService customUserDetailsService;
+
+    // ------------------- LOGIN -------------------
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody User loginRequest) {
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(
+                        loginRequest.getEmail(),
+                        loginRequest.getPassword()
+                )
+        );
+
+        UserDetails userDetails = customUserDetailsService.loadUserByUsername(loginRequest.getEmail());
+        String token = jwtUtil.generateToken(userDetails);
+
+        return ResponseEntity.ok(new JwtResponse(token));
+    }
+
+    // ------------------- GET LOGGED-IN USER -------------------
+    @GetMapping("/me")
+    public ResponseEntity<?> getLoggedInUser(@AuthenticationPrincipal UserDetails userDetails) {
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        return ResponseEntity.ok(user);
+    }
+
+    // ------------------- ADD CLIENT (SUPERADMIN ONLY) -------------------
+    @PostMapping("/clients")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<?> addClient(@RequestBody User client) {
+        if (userRepository.findByEmail(client.getEmail()).isPresent()) {
+            return ResponseEntity.badRequest().body("Email already exists");
+        }
+        client.setPassword(passwordEncoder.encode(client.getPassword()));
+        client.setRole(Role.CLIENT);
+        userRepository.save(client);
+        return ResponseEntity.ok("Client added successfully");
+    }
+
+    // ------------------- ADD EMPLOYEE (SUPERADMIN ONLY) -------------------
+    @PostMapping("/employees")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    public ResponseEntity<?> addEmployee(@RequestBody User employee) {
+        if (userRepository.findByEmail(employee.getEmail()).isPresent()) {
+            return ResponseEntity.badRequest().body("Email already exists");
+        }
+        employee.setPassword(passwordEncoder.encode(employee.getPassword()));
+        employee.setRole(Role.EMPLOYEE);
+        userRepository.save(employee);
+        return ResponseEntity.ok("Employee added successfully");
+    }
+
+    // ------------------- JWT RESPONSE -------------------
+    public record JwtResponse(String token) {}
+}

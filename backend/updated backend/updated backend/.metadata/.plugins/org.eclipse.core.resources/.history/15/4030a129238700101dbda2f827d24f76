@@ -1,0 +1,420 @@
+package com.example.demo.service;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Optional;
+
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.example.demo.exception.ResourceNotFoundException;
+import com.example.demo.model.BankDetails;
+import com.example.demo.model.Employee;
+import com.example.demo.model.Experience;
+import com.example.demo.model.JobDetails;
+import com.example.demo.model.PersonalDetails;
+import com.example.demo.repository.BankDetailsRepository;
+import com.example.demo.repository.EmployeeRepository;
+import com.example.demo.repository.ExperienceRepository;
+import com.example.demo.repository.JobDetailsRepository;
+import com.example.demo.repository.PersonalDetailsRepository;
+
+import lombok.RequiredArgsConstructor;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class EmployeeService {
+    private final EmployeeRepository employeeRepository;
+    private final ExperienceRepository experienceRepository;
+    private final BankDetailsRepository bankDetailsRepository;
+    private final PersonalDetailsRepository personalDetailsRepository;
+    private final JobDetailsRepository jobDetailsRepository;
+    
+    // Basic CRUD operations
+    public List<Employee> getAllEmployees() {
+        return employeeRepository.findAll();
+    }
+    
+    public List<Employee> getActiveEmployees() {
+        return employeeRepository.findByIsActive(true);
+    }
+    
+    public List<Employee> getInactiveEmployees() {
+        return employeeRepository.findByIsActive(false);
+    }
+    
+    public List<String> getAllDepartments() {
+        return employeeRepository.findAllCurrentDepartments();
+    }
+    
+    public List<Employee> getEmployeesByDepartment(String department) {
+        return employeeRepository.findByCurrentDepartment(department);
+    }
+    
+    public List<Employee> searchEmployees(String query) {
+        return employeeRepository.searchEmployees(query);
+    }
+    
+    public Employee getEmployeeById(String employeeId) {
+        return employeeRepository.findById(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found with id: " + employeeId));
+    }
+    
+    public Employee addEmployee(Employee employee) {
+        // Generate employee ID if not provided
+        if (employee.getEmployeeId() == null || employee.getEmployeeId().isEmpty()) {
+            String lastId = employeeRepository.findTopByOrderByEmployeeIdDesc()
+                    .map(Employee::getEmployeeId)
+                    .orElse("EMP000");
+            
+            int nextNum = Integer.parseInt(lastId.replace("EMP", "")) + 1;
+            employee.setEmployeeId("EMP" + String.format("%03d", nextNum));
+        }
+        
+        // Set current experience as "Present"
+        if (employee.getExperienceDetails() != null) {
+            employee.getExperienceDetails().forEach(exp -> {
+                exp.setLastWorkingDate("Present");
+                exp.setEmployee(employee);
+            });
+        }
+        
+        // Link personal and bank details
+        if (employee.getPersonalDetails() != null) {
+            employee.getPersonalDetails().setEmployee(employee);
+        }
+        
+        if (employee.getBankDetails() != null) {
+            employee.getBankDetails().setEmployee(employee);
+        }
+        
+        // Link job details if exists
+        if (employee.getJobDetails() != null) {
+            employee.getJobDetails().setEmployee(employee);
+        }
+        
+        return employeeRepository.save(employee);
+    }
+    
+    public Employee updateEmployee(String employeeId, Employee employeeDetails) {
+        Employee employee = getEmployeeById(employeeId);
+        
+        // Update basic info
+        employee.setName(employeeDetails.getName());
+        employee.setEmail(employeeDetails.getEmail());
+        employee.setPhone(employeeDetails.getPhone());
+        employee.setAddress(employeeDetails.getAddress());
+        employee.setEmergencyContactName(employeeDetails.getEmergencyContactName());
+        employee.setEmergencyContactphone(employeeDetails.getEmergencyContactphone());
+        employee.setEmergencyContactRelation(employeeDetails.getEmergencyContactRelation());
+        
+        // Update personal details
+        updatePersonalDetails(employee, employeeDetails);
+        
+        // Update bank details
+        updateBankDetails(employee, employeeDetails);
+        
+        // Update job details
+        updateJobDetails(employee, employeeDetails);
+        
+        // Update experience
+        updateExperienceDetails(employeeId, employee, employeeDetails);
+        
+        return employeeRepository.save(employee);
+    }
+    
+    public Employee createEmployeeFromRaw(Employee employee) {
+        // Set the employee references manually
+        if (employee.getPersonalDetails() != null) {
+            employee.getPersonalDetails().setEmployee(employee);
+        }
+        if (employee.getBankDetails() != null) {
+            employee.getBankDetails().setEmployee(employee);
+        }
+        if (employee.getExperienceDetails() != null) {
+            employee.getExperienceDetails().forEach(exp -> exp.setEmployee(employee));
+        }
+        if (employee.getJobDetails() != null) {
+            employee.getJobDetails().setEmployee(employee);
+        }
+        return employee;
+    }
+    
+    private void updatePersonalDetails(Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getPersonalDetails() != null) {
+            if (employee.getPersonalDetails() == null) {
+                employee.setPersonalDetails(employeeDetails.getPersonalDetails());
+                employee.getPersonalDetails().setEmployee(employee);
+            } else {
+                PersonalDetails personal = employee.getPersonalDetails();
+                PersonalDetails newPersonal = employeeDetails.getPersonalDetails();
+                
+                personal.setDateofBirth(newPersonal.getDateofBirth());
+                personal.setGender(newPersonal.getGender());
+                personal.setMaritalStatus(newPersonal.getMaritalStatus());
+                personal.setNationality(newPersonal.getNationality());
+                personal.setFatherName(newPersonal.getFatherName());
+                personal.setPanNumber(newPersonal.getPanNumber());
+                personal.setAadhaarNumber(newPersonal.getAadhaarNumber());
+            }
+        }
+    }
+    
+    private void updateBankDetails(Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getBankDetails() != null) {
+            if (employee.getBankDetails() == null) {
+                employee.setBankDetails(employeeDetails.getBankDetails());
+                employee.getBankDetails().setEmployee(employee);
+            } else {
+                BankDetails bank = employee.getBankDetails();
+                BankDetails newBank = employeeDetails.getBankDetails();
+                
+                bank.setAccountNumber(newBank.getAccountNumber());
+                bank.setBankName(newBank.getBankName());
+                bank.setIfscCode(newBank.getIfscCode());
+                bank.setBranch(newBank.getBranch());
+            }
+        }
+    }
+    
+    private void updateJobDetails(Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getJobDetails() != null) {
+            if (employee.getJobDetails() == null) {
+                employee.setJobDetails(employeeDetails.getJobDetails());
+                employee.getJobDetails().setEmployee(employee);
+            } else {
+                JobDetails job = employee.getJobDetails();
+                JobDetails newJob = employeeDetails.getJobDetails();
+                
+                job.setDeptId(newJob.getDeptId());
+                job.setDepartment(newJob.getDepartment());
+                job.setDesignation(newJob.getDesignation());
+                job.setDoj(newJob.getDoj());
+            }
+        }
+    }
+    
+    private void updateExperienceDetails(String employeeId, Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getExperienceDetails() != null && !employeeDetails.getExperienceDetails().isEmpty()) {
+            Optional<Experience> currentExp = experienceRepository.findCurrentExperience(employeeId);
+            
+            if (currentExp.isPresent()) {
+                Experience exp = currentExp.get();
+                Experience newExp = employeeDetails.getExperienceDetails().get(0);
+                
+                exp.setDepartment(newExp.getDepartment());
+                exp.setRole(newExp.getRole());
+                exp.setSalary(newExp.getSalary());
+                exp.setJoiningDate(newExp.getJoiningDate());
+            } else {
+                Experience newExp = employeeDetails.getExperienceDetails().get(0);
+                newExp.setEmployee(employee);
+                newExp.setLastWorkingDate("Present");
+                employee.getExperienceDetails().add(newExp);
+            }
+        }
+    }
+    
+    public void deactivateEmployee(String employeeId) {
+        Employee employee = getEmployeeById(employeeId);
+        employee.setIsActive(false);
+        
+        experienceRepository.findCurrentExperience(employeeId)
+                .ifPresent(exp -> exp.setLastWorkingDate(LocalDate.now().toString()));
+        
+        employeeRepository.save(employee);
+    }
+    public List<BankDetails> getAllBankDetails(String employeeId) {
+        List<BankDetails> bankDetails = bankDetailsRepository.findByEmployeeEmployeeId(employeeId);
+        if (bankDetails.isEmpty()) {
+            throw new ResourceNotFoundException("Bank details not found for employee: " + employeeId);
+        }
+        return bankDetails;
+    }
+    
+    public void reactivateEmployee(String employeeId, LocalDate joiningDate) {
+        Employee employee = getEmployeeById(employeeId);
+        employee.setIsActive(true);
+        
+        Experience lastExp = experienceRepository.findByEmployeeEmployeeIdOrderByIdDesc(employeeId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("No experience found for employee: " + employeeId));
+        
+        Experience newExp = Experience.builder()
+                .employee(employee)
+                .company("Your Company Name")
+                .department(lastExp.getDepartment())
+                .role(lastExp.getRole())
+                .salary(lastExp.getSalary())
+                .joiningDate(joiningDate)
+                .lastWorkingDate("Present")
+                .build();
+        
+        employee.getExperienceDetails().add(newExp);
+        employeeRepository.save(employee);
+    }
+    
+    // Bank Details operations
+    public BankDetails getBankDetails(String employeeId) {
+        return bankDetailsRepository.findLatestByEmployeeEmployeeId(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Bank details not found for employee: " + employeeId));
+    }
+    
+    public BankDetails saveBankDetails(BankDetails bankDetails) {
+        return bankDetailsRepository.save(bankDetails);
+    }
+    
+    public void deleteBankDetails(String employeeId) {
+        bankDetailsRepository.deleteByEmployeeEmployeeId(employeeId);
+    }
+    
+    public boolean hasBankDetails(String employeeId) {
+        return bankDetailsRepository.existsByEmployeeEmployeeId(employeeId);
+    }
+ // In EmployeeService.java, add this method:
+    public BankDetails getFirstBankDetails(String employeeId) {
+        List<BankDetails> bankDetails = bankDetailsRepository.findByEmployeeEmployeeId(employeeId);
+        if (bankDetails.isEmpty()) {
+            throw new ResourceNotFoundException("Bank details not found for employee: " + employeeId);
+        }
+        return bankDetails.get(0); // Return the first one
+    }
+    
+    // Personal Details operations
+    public PersonalDetails getPersonalDetails(String employeeId) {
+        return personalDetailsRepository.findByEmployeeEmployeeId(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Personal details not found for employee: " + employeeId));
+    }
+    
+    public PersonalDetails savePersonalDetails(PersonalDetails personalDetails) {
+        return personalDetailsRepository.save(personalDetails);
+    }
+    
+    public void deletePersonalDetails(String employeeId) {
+        personalDetailsRepository.deleteByEmployeeEmployeeId(employeeId);
+    }
+    
+    public boolean hasPersonalDetails(String employeeId) {
+        return personalDetailsRepository.existsByEmployeeEmployeeId(employeeId);
+    }
+    
+    // Experience operations
+    public List<Experience> getExperienceDetails(String employeeId) {
+        return experienceRepository.findByEmployeeEmployeeId(employeeId);
+    }
+    
+    public Experience saveExperience(Experience experience) {
+        return experienceRepository.save(experience);
+    }
+    
+    public void deleteAllExperience(String employeeId) {
+        experienceRepository.deleteByEmployeeEmployeeId(employeeId);
+    }
+    
+    public void deleteExperienceById(Long experienceId) {
+        experienceRepository.deleteById(experienceId);
+    }
+    
+    public boolean hasExperience(String employeeId) {
+        return experienceRepository.existsByEmployeeEmployeeId(employeeId);
+    }
+    
+    // Job Details operations
+    public JobDetails getJobDetails(String employeeId) {
+        return jobDetailsRepository.findByEmployeeEmployeeId(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Job details not found for employee: " + employeeId));
+    }
+    
+    public JobDetails saveJobDetails(JobDetails jobDetails) {
+        return jobDetailsRepository.save(jobDetails);
+    }
+    
+    public void deleteJobDetails(String employeeId) {
+        jobDetailsRepository.deleteByEmployeeEmployeeId(employeeId);
+    }
+    
+    public boolean hasJobDetails(String employeeId) {
+        return jobDetailsRepository.existsByEmployeeEmployeeId(employeeId);
+    }
+    
+    public byte[] generateEmployeeReport(List<Employee> employees) throws IOException {
+        try (Workbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            
+            Sheet sheet = workbook.createSheet("Employees");
+            
+            // Create header row with styling
+            createHeaderRow(workbook, sheet);
+            
+            // Create data rows
+            createDataRows(sheet, employees);
+            
+            // Auto-size columns
+            autoSizeColumns(sheet);
+            
+            workbook.write(outputStream);
+            return outputStream.toByteArray();
+        }
+    }
+    
+    private void createHeaderRow(Workbook workbook, Sheet sheet) {
+        Row headerRow = sheet.createRow(0);
+        String[] headers = {
+            "Employee ID", "Full Name", "Email Address", "Phone Number",
+            "Current Department", "Current Role", "Joining Date", "Current Salary"
+        };
+        
+        CellStyle headerStyle = workbook.createCellStyle();
+        Font headerFont = workbook.createFont();
+        headerFont.setBold(true);
+        headerStyle.setFont(headerFont);
+        
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(headerStyle);
+        }
+    }
+    
+    private void createDataRows(Sheet sheet, List<Employee> employees) {
+        int rowNum = 1;
+        for (Employee emp : employees) {
+            Row row = sheet.createRow(rowNum++);
+            Optional<Experience> currentExp = experienceRepository.findCurrentExperience(emp.getEmployeeId());
+            
+            // Basic employee info
+            row.createCell(0).setCellValue(emp.getEmployeeId());
+            row.createCell(1).setCellValue(emp.getName());
+            row.createCell(2).setCellValue(emp.getEmail());
+            row.createCell(3).setCellValue(emp.getPhone());
+            
+            // Experience info if available
+            if (currentExp.isPresent()) {
+                Experience exp = currentExp.get();
+                row.createCell(4).setCellValue(exp.getDepartment());
+                row.createCell(5).setCellValue(exp.getRole());
+                row.createCell(6).setCellValue(exp.getJoiningDate().toString());
+                if (exp.getSalary() != null) {
+                    row.createCell(7).setCellValue(exp.getSalary().doubleValue());
+                }
+            }
+        }
+    }
+    
+    private void autoSizeColumns(Sheet sheet) {
+        for (int i = 0; i < 8; i++) {
+            sheet.autoSizeColumn(i);
+        }
+    }
+}

@@ -1,0 +1,43 @@
+package com.example.demo.controller;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.example.demo.dto.AuthRequest;
+import com.example.demo.service.UserDetailsServiceImpl;
+import com.example.demo.util.JwtUtil;
+
+import lombok.RequiredArgsConstructor;
+
+@RestController
+@RequestMapping("/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final AuthenticationManager authenticationManager;
+    private final UserDetailsServiceImpl userDetailsService;
+    private final JwtUtil jwtUtil;
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody AuthRequest request) {
+        // ✅ Authenticate
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+        );
+
+        // ✅ Load user details
+        final UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
+
+        // ✅ Generate JWT
+        final String jwt = jwtUtil.generateToken(userDetails);
+
+        // ✅ Return token as JSON
+        return ResponseEntity.ok("{\"token\":\"" + jwt + "\"}");
+    }
+}

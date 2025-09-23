@@ -1,0 +1,49 @@
+package com.example.demo.service;
+
+import com.example.demo.model.Employee;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.stereotype.Service;
+import lombok.RequiredArgsConstructor;
+
+@Service
+@RequiredArgsConstructor
+public class EmailService {
+
+    private final JavaMailSender mailSender;
+
+    public void sendWelcomeEmail(Employee employee) {
+        if (employee.getUser() == null || employee.getUser().getEmail() == null) return;
+
+        String companyName = "Arah Infotech"; // Replace with dynamic value if needed
+        String employeeName = employee.getName() != null ? employee.getName() : "Employee";
+        String jobTitle = employee.getJobDetails() != null && employee.getJobDetails().getDesignation() != null
+                ? employee.getJobDetails().getDesignation()
+                : "Employee";
+        String joiningDate = employee.getJobDetails() != null && employee.getJobDetails().getJoiningDate() != null
+                ? employee.getJobDetails().getJoiningDate().toString()
+                : "N/A";
+        String employeeId = employee.getEmployeeId() != null ? employee.getEmployeeId() : "N/A";
+
+        String subject = "Welcome to " + companyName + ", " + employeeName + "! 🎉";
+
+        String text = "Dear " + employeeName + ",\n\n" +
+                "We are delighted to welcome you to " + companyName + " as our new " + jobTitle + ". " +
+                "We are excited to have you on board and look forward to the skills, ideas, and enthusiasm you will bring to the team.\n\n" +
+                "Your official start date is " + joiningDate + ", and your employee ID is " + employeeId + 
+                ". Please log in to the HRMS portal to complete your onboarding formalities and access company resources.\n\n" +
+                "At " + companyName + ", we believe in teamwork, growth, and innovation. " +
+                "We are confident you will have a rewarding journey with us.\n\n" +
+                "Once again, welcome to the team — we’re glad to have you with us! 🌟\n\n" +
+                "Best regards,\n" +
+                "HR Team\n" +
+                companyName;
+
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setTo(employee.getUser().getEmail());
+        message.setSubject(subject);
+        message.setText(text);
+
+        mailSender.send(message);
+    }
+}

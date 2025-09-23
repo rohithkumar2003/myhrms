@@ -1,0 +1,72 @@
+package com.example.demo.util;
+
+import java.util.Date;
+import java.util.function.Function;
+
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Component;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.security.Keys;
+
+import javax.crypto.SecretKey;
+
+@Component
+public class JwtUtil {
+
+    // ✅ secure 256-bit key (at least 32 chars)
+    private final SecretKey SECRET_KEY = Keys.hmacShaKeyFor(
+            "this_is_a_super_secure_secret_key_123456".getBytes()
+    );
+
+    private final long EXPIRATION_TIME = 1000 * 60 * 60 * 24; // 1 hour
+
+    // ✅ Extract username (email) from token
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+
+    // ✅ Extract expiration date
+    public Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+    }
+
+    private Claims extractAllClaims(String token) {
+        return Jwts.parserBuilder()
+                .setSigningKey(SECRET_KEY)  // ✅ fixed parser for SecretKey
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+
+    private Boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
+    }
+
+    // ✅ Generate JWT
+    public String generateToken(UserDetails userDetails) {
+        return createToken(userDetails.getUsername());
+    }
+
+    private String createToken(String subject) {
+        return Jwts.builder()
+                .setSubject(subject) // username/email
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
+                .signWith(SECRET_KEY, SignatureAlgorithm.HS256) // ✅ secure signing
+                .compact();
+    }
+
+    // ✅ Token validation
+    public Boolean validateToken(String token, UserDetails userDetails) {
+        final String username = extractUsername(token);
+        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+}

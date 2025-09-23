@@ -1,0 +1,808 @@
+package com.example.demo.service;
+
+import java.time.DayOfWeek;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import com.example.demo.model.Overtime.OTStatus;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.example.demo.exception.AttendanceException;
+import com.example.demo.exception.ResourceNotFoundException;
+import com.example.demo.model.Attendance;
+import com.example.demo.model.DepartmentSettings;
+import com.example.demo.model.Employee;
+import com.example.demo.model.Holiday;
+import com.example.demo.model.LateLoginCounter;
+import com.example.demo.model.Overtime;
+import com.example.demo.repository.AttendanceRepository;
+import com.example.demo.repository.DepartmentSettingsRepository;
+import com.example.demo.repository.EmployeeRepository;
+import com.example.demo.repository.ExperienceRepository;
+import com.example.demo.repository.HolidayRepository;
+import com.example.demo.repository.LateLoginCounterRepository;
+import com.example.demo.repository.OvertimeRepository;
+
+@Service
+@Transactional
+public class AttendanceService {
+	@Autowired
+	private OvertimeService overtimeService;
+    @Autowired
+    private AttendanceRepository attendanceRepository;
+
+    @Autowired
+    private EmployeeRepository employeeRepository;
+
+    @Autowired
+    private HolidayRepository holidayRepository;
+
+    @Autowired
+    private OvertimeRepository overtimeRepository;
+
+    @Autowired
+    private LateLoginCounterRepository lateLoginCounterRepository;
+
+    @Autowired
+    private DepartmentSettingsRepository departmentSettingsRepository;
+
+    @Autowired
+    private ExperienceRepository experienceRepository;
+
+    // Punch In
+ // Punch In
+    public Attendance punchIn(String employeeId) {
+        LocalDate today = LocalDate.now();
+        LocalDateTime now = LocalDateTime.now();
+
+        // Get department settings first
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        
+        // Add time validation here
+        boolean isAfterPunchInStart = !now.toLocalTime().isBefore(settings.getPunchInStart());
+        boolean isBeforePunchOutEnd = now.toLocalTime().isBefore(settings.getPunchOutEnd());
+        boolean isWithinTimeWindow = isAfterPunchInStart && isBeforePunchOutEnd;
+        
+        if (!isWithinTimeWindow) {
+            throw new AttendanceException("Punch In is only allowed between " + 
+                settings.getPunchInStart() + " and " + settings.getPunchOutEnd()+". Current time: " + now.toLocalTime());
+        }
+        
+        if (!isPunchInEnabled(employeeId)) {
+            throw new AttendanceException("Punch In is not enabled for this employee. Possible reasons: Not working hours, Holiday without OT allocation, or Employee on leave");
+        }
+
+        Employee employee = employeeRepository.findById(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found with id: " + employeeId));
+
+        // Check if already punched in today
+        Optional<Attendance> existingAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+        if (existingAttendance.isPresent() && existingAttendance.get().getPunchInTime() != null) {
+            throw new AttendanceException("Already punched in today");
+        }
+
+        Attendance attendance;
+        if (existingAttendance.isPresent()) {
+            attendance = existingAttendance.get();
+        } else {
+            attendance = new Attendance(employee, today);
+        }
+
+        attendance.setPunchInTime(now);
+
+        // ✅ FIX: Check for ANY type of approved OT (both holiday OT and regular OT)
+        Optional<Overtime> overtimeOpt = overtimeRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+        if (overtimeOpt.isPresent() && overtimeOpt.get().getStatus() == OTStatus.APPROVED) {
+            attendance.setIsOtDay(true);
+            System.out.println("Marked as OT day. Type: " + overtimeOpt.get().getType());
+        }
+        // Keep the holiday check as well for backward compatibility
+        else {
+            Optional<Holiday> holiday = holidayRepository.findByDate(today);
+            if (holiday.isPresent() && overtimeRepository.existsByEmployeeEmployeeIdAndDate(employeeId, today)) {
+                attendance.setIsOtDay(true);
+                System.out.println("Marked as holiday OT day");
+            }
+        }
+
+        // Check if it's a late login based on department settings
+        boolean isLateLogin = now.toLocalTime().isAfter(settings.getLateLoginThreshold());
+        attendance.setIsLateLogin(isLateLogin);
+
+        return attendanceRepository.save(attendance);
+    }
+    // Punch Out
+    public Attendance punchOut(String employeeId) {
+        LocalDate today = LocalDate.now();
+        LocalDateTime now = LocalDateTime.now();
+        
+        Optional<Attendance> attendanceOpt = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+
+        if (attendanceOpt.isEmpty()) {
+            throw new AttendanceException("No attendance record found for today. Please punch in first.");
+        }
+
+        Attendance attendance = attendanceOpt.get();
+
+        if (attendance.getPunchInTime() == null) {
+            throw new AttendanceException("Not punched in today. Please punch in first.");
+        }
+
+        if (attendance.getPunchOutTime() != null) {
+            throw new AttendanceException("Already punched out today");
+        }
+        
+        // Check if within punch out end time
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        if (now.toLocalTime().isAfter(settings.getPunchOutEnd())) {
+            throw new AttendanceException("Punch out not allowed after " + settings.getPunchOutEnd());
+        }
+
+        attendance.setPunchOutTime(now);
+
+        // Calculate hours worked
+        Duration duration = Duration.between(attendance.getPunchInTime(), now);
+        double hoursWorked = duration.toMinutes() / 60.0;
+        attendance.setHoursWorked(hoursWorked);
+
+        // Calculate status and idle time according to HRMS policies
+        calculateAttendanceStatus(attendance);
+        overtimeService.updateOTStatsAfterPunchOut(employeeId, today, hoursWorked);
+
+        return attendanceRepository.save(attendance);
+    }
+
+    // Check if punch out is enabled
+    public boolean isPunchOutEnabled(String employeeId) {
+        LocalDate today = LocalDate.now();
+        LocalTime now = LocalTime.now();
+        
+        // Check if employee exists
+        Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+        if (employeeOpt.isEmpty()) {
+            return false;
+        }
+        
+        // Get department settings
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        
+        // Check if punched in today
+        Optional<Attendance> todayAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+        if (todayAttendance.isEmpty() || todayAttendance.get().getPunchInTime() == null) {
+            return false; // Not punched in
+        }
+        
+        if (todayAttendance.get().getPunchOutTime() != null) {
+            return false; // Already punched out
+        }
+        
+        // Check if within punch out end time
+        boolean isBeforePunchOutEnd = now.isBefore(settings.getPunchOutEnd());
+        
+        return isBeforePunchOutEnd;
+    }
+
+    // Get punch out status with details
+    public Map<String, Object> getPunchOutStatus(String employeeId) {
+        Map<String, Object> response = new HashMap<>();
+        
+        boolean isPunchOutEnabled = isPunchOutEnabled(employeeId);
+        response.put("punchOutEnabled", isPunchOutEnabled);
+        
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        response.put("punchOutEndTime", settings.getPunchOutEnd());
+        
+        Optional<Attendance> todayAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, LocalDate.now());
+        if (todayAttendance.isPresent() && todayAttendance.get().getPunchInTime() != null) {
+            response.put("punchInTime", todayAttendance.get().getPunchInTime());
+        }
+        
+        return response;
+    }
+
+    // Punch-In Eligibility according to HRMS policies
+    public boolean isPunchInEnabled(String employeeId) {
+        LocalDate today = LocalDate.now();
+        LocalTime now = LocalTime.now();
+        System.out.println("=== DEBUG: Punch In Check ===");
+        System.out.println("Current Time: " + now);
+        System.out.println("Current Date: " + today);
+        // Check if employee exists
+        Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+        System.out.println("Employee exists: " + employeeOpt.isPresent());
+        if (employeeOpt.isEmpty()) {
+        	  System.out.println("DEBUG: Employee not found");
+            return false;
+        }
+        
+        // Get department settings
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        System.out.println("Department: " + settings.getDepartmentName());
+        System.out.println("Emp Type: " + settings.getEmpType());
+        System.out.println("Punch In Start: " + settings.getPunchInStart());
+        System.out.println("Punch Out End: " + settings.getPunchOutEnd());
+        System.out.println("Late Login Threshold: " + settings.getLateLoginThreshold());
+        
+        // Check if today is a holiday
+        Optional<Holiday> holiday = holidayRepository.findByDate(today);
+        boolean isHoliday = holiday.isPresent();
+        System.out.println("Is Holiday: " + isHoliday);
+        
+        // Check if OT is allocated for this employee on holiday
+        boolean isOtAllocated = false;
+        if (isHoliday) {
+            isOtAllocated = overtimeRepository.existsByEmployeeEmployeeIdAndDate(employeeId, today);
+            System.out.println("OT Allocated: " + isOtAllocated);
+        }
+        
+        // Check if employee is on leave today
+        boolean isOnLeave = isEmployeeOnLeave(employeeId, today);
+        System.out.println("Is On Leave: " + isOnLeave);
+        // Check if it's a working day (Monday to Friday)
+        DayOfWeek dayOfWeek = today.getDayOfWeek();
+        boolean isWorkingDay = dayOfWeek != DayOfWeek.SUNDAY;
+        System.out.println("Is Working Day: " + isWorkingDay);
+        System.out.println("Today is: " + dayOfWeek);
+        
+        // Check time condition (after punch_in_start time)
+        boolean isAfterPunchInStart = !now.isBefore(settings.getPunchInStart());
+        boolean isBeforePunchOutEnd = now.isBefore(settings.getPunchOutEnd());
+        boolean isWithinTimeWindow = isAfterPunchInStart && isBeforePunchOutEnd;
+        System.out.println("After Punch In Start: " + isAfterPunchInStart);
+        System.out.println("Current time: " + now);
+        System.out.println("Punch in start: " + settings.getPunchInStart());
+        
+        // Check if already punched in today
+        Optional<Attendance> todayAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+        boolean isAlreadyPunchedIn = todayAttendance.isPresent() && todayAttendance.get().getPunchInTime() != null;
+        boolean isAlreadyPunchedOut = todayAttendance.isPresent() && todayAttendance.get().getPunchOutTime() != null;
+        System.out.println("Already Punched In: " + isAlreadyPunchedIn);
+        System.out.println("Already Punched Out: " + isAlreadyPunchedOut);
+        
+        // Punch In enabled conditions
+        boolean enabled = !isAlreadyPunchedIn && !isAlreadyPunchedOut &&
+               ((isWorkingDay && !isHoliday) || (isHoliday && isOtAllocated)) &&
+               isAfterPunchInStart && !isOnLeave;
+        
+        System.out.println("Final Punch In Enabled: " + enabled);
+        System.out.println("=== DEBUG END ===");
+        
+        
+        return enabled;
+    }
+ // Add these methods for testing with custom times
+    public Attendance manualPunchIn(String employeeId, LocalDateTime customPunchInTime) {
+        LocalDate today = customPunchInTime.toLocalDate();
+        
+        Employee employee = employeeRepository.findById(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found with id: " + employeeId));
+
+        // Check if already punched in today
+        Optional<Attendance> existingAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+        if (existingAttendance.isPresent() && existingAttendance.get().getPunchInTime() != null) {
+            throw new AttendanceException("Already punched in today");
+        }
+
+        Attendance attendance;
+        if (existingAttendance.isPresent()) {
+            attendance = existingAttendance.get();
+        } else {
+            attendance = new Attendance(employee, today);
+        }
+
+        attendance.setPunchInTime(customPunchInTime);
+
+        // ✅ FIX: Check for ANY type of approved OT
+        Optional<Overtime> overtimeOpt = overtimeRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+        if (overtimeOpt.isPresent() && overtimeOpt.get().getStatus() == OTStatus.APPROVED) {
+            attendance.setIsOtDay(true);
+            System.out.println("Marked as OT day. Type: " + overtimeOpt.get().getType());
+        }
+
+        // Check if it's a late login based on department settings
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        boolean isAfterPunchInStart = !customPunchInTime.toLocalTime().isBefore(settings.getPunchInStart());
+        boolean isBeforePunchOutEnd = customPunchInTime.toLocalTime().isBefore(settings.getPunchOutEnd());
+        boolean isLateLogin = customPunchInTime.toLocalTime().isAfter(settings.getLateLoginThreshold());
+        if (!isAfterPunchInStart || !isBeforePunchOutEnd) {
+            throw new AttendanceException("Punch In time must be between " + 
+                settings.getPunchInStart() + " and " + settings.getPunchOutEnd());
+        }
+        attendance.setIsLateLogin(isLateLogin);
+
+        return attendanceRepository.save(attendance);
+    }
+    public Attendance manualPunchOut(String employeeId, LocalDateTime customPunchOutTime) {
+        LocalDate today = customPunchOutTime.toLocalDate();
+        Optional<Attendance> attendanceOpt = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, today);
+
+        if (attendanceOpt.isEmpty()) {
+            throw new AttendanceException("No attendance record found for today. Please punch in first.");
+        }
+
+        Attendance attendance = attendanceOpt.get();
+
+        if (attendance.getPunchInTime() == null) {
+            throw new AttendanceException("Not punched in today. Please punch in first.");
+        }
+
+        if (attendance.getPunchOutTime() != null) {
+            throw new AttendanceException("Already punched out today");
+        }
+
+        attendance.setPunchOutTime(customPunchOutTime);
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        if (customPunchOutTime.toLocalTime().isAfter(settings.getPunchOutEnd())) {
+            throw new AttendanceException("Punch out not allowed after " + settings.getPunchOutEnd());
+        }
+
+        // Calculate hours worked
+        Duration duration = Duration.between(attendance.getPunchInTime(), customPunchOutTime);
+        double hoursWorked = duration.toMinutes() / 60.0;
+        attendance.setHoursWorked(hoursWorked);
+
+        // Calculate status and idle time
+        calculateAttendanceStatus(attendance);
+        
+        // ✅ CRITICAL: Call OT service to update stats
+        overtimeService.updateOTStatsAfterPunchOut(employeeId, today, hoursWorked);
+
+        return attendanceRepository.save(attendance);
+    }
+    // Get department settings for employee with emp_type
+    private DepartmentSettings getDepartmentSettings(String employeeId) {
+        // Get employee's current department and type
+        Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+        if (employeeOpt.isEmpty()) {
+            return getDefaultDepartmentSettings();
+        }
+
+        Employee employee = employeeOpt.get();
+        String empType = employee.getTypeOfEmployee() != null ? employee.getTypeOfEmployee().name() : "FULL_TIME";
+        
+        Optional<String> departmentOpt = experienceRepository.findCurrentDepartmentByEmployeeId(employeeId);
+        String department = departmentOpt.orElse("DEFAULT");
+        
+        // First try specific emp_type settings, then fallback to DEFAULT
+        Optional<DepartmentSettings> specificSettings = departmentSettingsRepository.findByDepartmentNameAndEmpType(department, empType);
+        if (specificSettings.isPresent()) {
+            return specificSettings.get();
+        }
+        
+        // Fallback to DEFAULT emp_type for the department
+        Optional<DepartmentSettings> defaultSettings = departmentSettingsRepository.findDefaultByDepartmentName(department);
+        if (defaultSettings.isPresent()) {
+            return defaultSettings.get();
+        }
+        
+        // Final fallback to global DEFAULT
+        return getDefaultDepartmentSettings();
+    }
+
+    public DepartmentSettings getDefaultDepartmentSettings() {
+        return new DepartmentSettings("DEFAULT", "DEFAULT",
+            LocalTime.of(9, 15),  // punchInStart
+            LocalTime.of(20, 0),  // punchOutEnd
+            LocalTime.of(9, 30),  // officeStart  
+            LocalTime.of(18, 30), // officeEnd
+            LocalTime.of(9, 45),  // lateLoginThreshold
+            4.0,                  // halfDayThreshold
+            9.0,                  // fullDayThreshold
+            LocalTime.of(9, 0),   // morningHalfLogin
+            LocalTime.of(13, 0),  // morningHalfLogout
+            LocalTime.of(14, 0),  // afternoonHalfLogin
+            LocalTime.of(18, 0)   // afternoonHalfLogout
+        );
+    }
+
+    // Calculate attendance status with department settings
+ // Calculate attendance status with department settings
+    public void calculateAttendanceStatus(Attendance attendance) {
+        DepartmentSettings settings = getDepartmentSettings(attendance.getEmployee().getEmployeeId());
+        double hoursWorked = attendance.getHoursWorked();
+        System.out.println("=== DEBUG: Status Calculation ===");
+        System.out.println("Hours worked: " + hoursWorked);
+        System.out.println("Half day threshold: " + settings.getHalfDayThreshold());
+        System.out.println("Full day threshold: " + settings.getFullDayThreshold());
+        System.out.println("Is late login: " + attendance.getIsLateLogin());
+        System.out.println("Is OT Day: " + attendance.getIsOtDay());
+        
+        String status;
+        double idleTime;
+
+        if (hoursWorked < settings.getHalfDayThreshold()) {
+            status = "Absent";
+            idleTime = settings.getFullDayThreshold();
+            System.out.println("Case: Absent (< " + settings.getHalfDayThreshold() + " hours)");
+        } else if (hoursWorked >= settings.getHalfDayThreshold() && hoursWorked < settings.getFullDayThreshold()) {
+            status = "Half Day";
+            idleTime = settings.getFullDayThreshold() - hoursWorked;
+            System.out.println("Case: Half Day (" + settings.getHalfDayThreshold() + " - " + settings.getFullDayThreshold() + " hours)");
+        } else {
+            status = "Present (On Time)";
+            idleTime = Math.max(0, settings.getFullDayThreshold() - hoursWorked);
+            System.out.println("Case: Present (On Time) (>= " + settings.getFullDayThreshold() + " hours)");
+            
+            // ✅ NEW: Increment worked_days for regular working days (not OT)
+            if (attendance.getIsOtDay() == null || !attendance.getIsOtDay()) {
+                Employee employee = attendance.getEmployee();
+                Integer currentWorkedDays = employee.getWorkedDays() != null ? employee.getWorkedDays() : 0;
+                employee.setWorkedDays(currentWorkedDays + 1);
+                employeeRepository.save(employee);
+                System.out.println("Incremented worked_days to: " + employee.getWorkedDays());
+            }
+        }
+
+        // Override for late login
+        if (attendance.getIsLateLogin() != null && attendance.getIsLateLogin() && 
+            hoursWorked >= settings.getFullDayThreshold()) {
+            System.out.println("Late login override: Changing status to Present (Late Login)");
+            status = "Present (Late Login)";
+            idleTime = Math.max(0, settings.getFullDayThreshold() - hoursWorked);
+            System.out.println("Case: Present (On Time) (>= " + settings.getFullDayThreshold() + " hours)");
+            
+            // ✅ NEW: Increment worked_days for late login (if not OT)
+            if (attendance.getIsOtDay() == null || !attendance.getIsOtDay()) {
+                Employee employee = attendance.getEmployee();
+                Integer currentWorkedDays = employee.getWorkedDays() != null ? employee.getWorkedDays() : 0;
+                employee.setWorkedDays(currentWorkedDays + 1);
+                employeeRepository.save(employee);
+                System.out.println("Incremented worked_days (late login) to: " + employee.getWorkedDays());
+            }
+            else {
+                System.out.println("⚠️  OT day - workedDays NOT incremented");
+            }
+            
+            // Update late login counter and check for 3rd late login
+            LocalDate date = attendance.getDate();
+            int month = date.getMonthValue();
+            int year = date.getYear();
+            String empId = attendance.getEmployee().getEmployeeId();
+
+            LateLoginCounter counter = lateLoginCounterRepository
+                .findByEmployeeEmployeeIdAndMonthAndYear(empId, month, year)
+                .orElse(new LateLoginCounter(attendance.getEmployee(), month, year));
+            
+            counter.setLateLoginCount(counter.getLateLoginCount() + 1);
+            lateLoginCounterRepository.save(counter);
+            
+            // Special case: if it's the 3rd late login, it becomes Half Day
+            if (counter.getLateLoginCount() % 3 == 0) {
+                status = "Half Day"; // 3rd late login becomes half day
+                System.out.println("3rd late login converted to Half Day");
+            }
+        }
+
+        attendance.setStatus(status);
+        attendance.setIdleTime(idleTime);
+        
+        System.out.println("Final status: " + status);
+        System.out.println("=== DEBUG END ===");
+        
+        System.out.println("=== DEBUG: OT CHECK ===");
+        System.out.println("Is OT Day: " + attendance.getIsOtDay());
+        System.out.println("Current workedDays: " + attendance.getEmployee().getWorkedDays());
+        System.out.println("Will increment workedDays: " + (attendance.getIsOtDay() == null || !attendance.getIsOtDay()));
+    }
+
+    /**
+     * Get total worked hours and idle hours for an employee in a specific month
+     */
+    public Map<String, Object> getMonthlyHoursSummary(String employeeId, int year, int month) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("employeeId", employeeId);
+        response.put("year", year);
+        response.put("month", month);
+        
+        try {
+            // Get all attendance records for the month
+            LocalDate startDate = LocalDate.of(year, month, 1);
+            LocalDate endDate = startDate.withDayOfMonth(startDate.lengthOfMonth());
+            
+            List<Attendance> monthlyAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDateBetween(
+                employeeId, startDate, endDate);
+            
+            double totalWorkedHours = 0.0;
+            double totalIdleHours = 0.0;
+            int workingDays = 0;
+            int presentDays = 0;
+            int absentDays = 0;
+            int halfDays = 0;
+            
+            // Calculate totals
+            for (Attendance attendance : monthlyAttendance) {
+                if (attendance.getHoursWorked() != null) {
+                    totalWorkedHours += attendance.getHoursWorked();
+                }
+                
+                if (attendance.getIdleTime() != null) {
+                    totalIdleHours += attendance.getIdleTime();
+                }
+                
+                // Count days by status
+                if (attendance.getStatus() != null) {
+                    if (attendance.getStatus().equals("Present (On Time)") || 
+                        attendance.getStatus().equals("Present (Late Login)")) {
+                        presentDays++;
+                    } else if (attendance.getStatus().equals("Half Day")) {
+                        halfDays++;
+                    } else if (attendance.getStatus().equals("Absent")) {
+                        absentDays++;
+                    }
+                }
+                
+                // Count working days (excluding weekends)
+                if (attendance.getDate().getDayOfWeek() != DayOfWeek.SATURDAY && 
+                    attendance.getDate().getDayOfWeek() != DayOfWeek.SUNDAY) {
+                    workingDays++;
+                }
+            }
+            
+            response.put("totalWorkedHours", Math.round(totalWorkedHours * 100.0) / 100.0);
+            response.put("totalIdleHours", Math.round(totalIdleHours * 100.0) / 100.0);
+            response.put("workingDays", workingDays);
+            response.put("presentDays", presentDays);
+            response.put("halfDays", halfDays);
+            response.put("absentDays", absentDays);
+            response.put("attendanceRecords", monthlyAttendance.size());
+            
+        } catch (Exception e) {
+            response.put("error", "Failed to calculate monthly hours: " + e.getMessage());
+        }
+        
+        return response;
+    }
+
+
+    /**
+     * Get daily breakdown of hours for a month
+     */
+    public Map<String, Object> getMonthlyHoursBreakdown(String employeeId, int year, int month) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("employeeId", employeeId);
+        response.put("year", year);
+        response.put("month", month);
+        
+        try {
+            LocalDate startDate = LocalDate.of(year, month, 1);
+            LocalDate endDate = startDate.withDayOfMonth(startDate.lengthOfMonth());
+            
+            List<Attendance> monthlyAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDateBetween(
+                employeeId, startDate, endDate);
+            
+            List<Map<String, Object>> dailyBreakdown = new ArrayList<>();
+            double totalWorkedHours = 0.0;
+            double totalIdleHours = 0.0;
+            
+            for (Attendance attendance : monthlyAttendance) {
+                Map<String, Object> dayInfo = new HashMap<>();
+                dayInfo.put("date", attendance.getDate());
+                dayInfo.put("workedHours", attendance.getHoursWorked() != null ? 
+                    Math.round(attendance.getHoursWorked() * 100.0) / 100.0 : 0.0);
+                dayInfo.put("idleHours", attendance.getIdleTime() != null ? 
+                    Math.round(attendance.getIdleTime() * 100.0) / 100.0 : 0.0);
+                dayInfo.put("status", attendance.getStatus());
+                dayInfo.put("punchInTime", attendance.getPunchInTime());
+                dayInfo.put("punchOutTime", attendance.getPunchOutTime());
+                dayInfo.put("isLateLogin", attendance.getIsLateLogin());
+                dayInfo.put("isOtDay", attendance.getIsOtDay());
+                
+                dailyBreakdown.add(dayInfo);
+                
+                if (attendance.getHoursWorked() != null) {
+                    totalWorkedHours += attendance.getHoursWorked();
+                }
+                if (attendance.getIdleTime() != null) {
+                    totalIdleHours += attendance.getIdleTime();
+                }
+            }
+            
+            response.put("dailyBreakdown", dailyBreakdown);
+            response.put("totalWorkedHours", Math.round(totalWorkedHours * 100.0) / 100.0);
+            response.put("totalIdleHours", Math.round(totalIdleHours * 100.0) / 100.0);
+            response.put("averageDailyHours", monthlyAttendance.isEmpty() ? 0 : 
+                Math.round((totalWorkedHours / monthlyAttendance.size()) * 100.0) / 100.0);
+            
+        } catch (Exception e) {
+            response.put("error", "Failed to get monthly breakdown: " + e.getMessage());
+        }
+        
+        return response;
+    }
+    /**
+     * Get hours summary for multiple months
+     */
+    public Map<String, Object> getMultiMonthHoursSummary(String employeeId, int startYear, int startMonth, int endYear, int endMonth) {
+        Map<String, Object> response = new HashMap<>();
+        response.put("employeeId", employeeId);
+        
+        List<Map<String, Object>> monthlySummaries = new ArrayList<>();
+        double grandTotalWorkedHours = 0.0;
+        double grandTotalIdleHours = 0.0;
+        
+        LocalDate startDate = LocalDate.of(startYear, startMonth, 1);
+        LocalDate endDate = LocalDate.of(endYear, endMonth, 1).withDayOfMonth(
+            LocalDate.of(endYear, endMonth, 1).lengthOfMonth());
+        
+        try {
+            LocalDate current = startDate;
+            while (!current.isAfter(endDate)) {
+                Map<String, Object> monthlySummary = getMonthlyHoursSummary(employeeId, current.getYear(), current.getMonthValue());
+                
+                if (!monthlySummary.containsKey("error")) {
+                    monthlySummaries.add(monthlySummary);
+                    grandTotalWorkedHours += (Double) monthlySummary.get("totalWorkedHours");
+                    grandTotalIdleHours += (Double) monthlySummary.get("totalIdleHours");
+                }
+                
+                current = current.plusMonths(1);
+            }
+            
+            response.put("monthlySummaries", monthlySummaries);
+            response.put("grandTotalWorkedHours", Math.round(grandTotalWorkedHours * 100.0) / 100.0);
+            response.put("grandTotalIdleHours", Math.round(grandTotalIdleHours * 100.0) / 100.0);
+            response.put("period", startDate + " to " + endDate);
+            
+        } catch (Exception e) {
+            response.put("error", "Failed to get multi-month summary: " + e.getMessage());
+        }
+        
+        return response;
+    }
+    private boolean isEmployeeOnLeave(String employeeId, LocalDate date) {
+        // Implement leave checking logic based on your leave module
+        // For now, return false as placeholder
+        System.out.println("DEBUG: Leave check not implemented yet - returning false");
+        return false;
+    }
+
+    // Auto Punch-Out if missed (runs daily at 7:00 PM)
+    @Scheduled(cron = "0 0 19 * * ?")
+    public void autoPunchOutEmployees() {
+        LocalDate today = LocalDate.now();
+        List<Attendance> activeAttendances = attendanceRepository.findByDateAndPunchOutTimeIsNull(today);
+
+        for (Attendance attendance : activeAttendances) {
+            DepartmentSettings settings = getDepartmentSettings(attendance.getEmployee().getEmployeeId());
+            LocalDateTime punchOutTime = LocalDateTime.of(today, settings.getPunchOutEnd());
+            
+            attendance.setPunchOutTime(punchOutTime);
+            
+            // Calculate hours worked
+            Duration duration = Duration.between(attendance.getPunchInTime(), punchOutTime);
+            double hoursWorked = duration.toMinutes() / 60.0;
+            attendance.setHoursWorked(hoursWorked);
+            
+            calculateAttendanceStatus(attendance);
+            attendanceRepository.save(attendance);
+        }
+    }
+
+    // Additional methods for attendance history
+    public List<Attendance> getAttendanceHistory(String employeeId, LocalDate startDate, LocalDate endDate) {
+        if (!employeeRepository.existsById(employeeId)) {
+            throw new ResourceNotFoundException("Employee not found with id: " + employeeId);
+        }
+        
+        if (startDate.isAfter(endDate)) {
+            throw new AttendanceException("Start date cannot be after end date");
+        }
+        
+        return attendanceRepository.findByEmployeeEmployeeIdAndDateBetween(employeeId, startDate, endDate);
+    }
+
+    public Optional<Attendance> getTodayAttendance(String employeeId) {
+        if (!employeeRepository.existsById(employeeId)) {
+            throw new ResourceNotFoundException("Employee not found with id: " + employeeId);
+        }
+        
+        return attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, LocalDate.now());
+    }
+
+    // Get punch status for dashboard
+ // Get punch status for dashboard - with date parameter
+    public Map<String, Object> getPunchStatus(String employeeId, LocalDate date) {
+        Map<String, Object> response = new HashMap<>();
+        
+        boolean isPunchInEnabled = isPunchInEnabledForDate(employeeId, date);
+        response.put("punchInEnabled", isPunchInEnabled);
+        
+        // Get attendance for the specific date
+        Optional<Attendance> dateAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, date);
+        
+        if (dateAttendance.isPresent()) {
+            Attendance attendance = dateAttendance.get();
+            String currentStatus = "Inactive";
+            
+            if (attendance.getPunchInTime() != null && attendance.getPunchOutTime() == null) {
+                currentStatus = "Active"; // Currently punched in
+            } else if (attendance.getPunchInTime() != null && attendance.getPunchOutTime() != null) {
+                currentStatus = "Completed"; // Already punched out
+            }
+            
+            response.put("currentStatus", currentStatus);
+            response.put("punchInTime", attendance.getPunchInTime());
+            response.put("punchOutTime", attendance.getPunchOutTime());
+            response.put("attendanceStatus", attendance.getStatus());
+            response.put("hoursWorked", attendance.getHoursWorked());
+            response.put("isLateLogin", attendance.getIsLateLogin());
+            response.put("isOtDay", attendance.getIsOtDay());
+        } else {
+            response.put("currentStatus", "Inactive");
+            response.put("attendanceStatus", "Absent");
+        }
+        
+        // Add date information
+        response.put("date", date);
+        response.put("isHoliday", holidayRepository.findByDate(date).isPresent());
+        response.put("dayOfWeek", date.getDayOfWeek().name());
+        
+        // Add department settings info
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        response.put("punchInStart", settings.getPunchInStart());
+        response.put("punchOutEnd", settings.getPunchOutEnd());
+        response.put("lateLoginThreshold", settings.getLateLoginThreshold());
+        
+        return response;
+    }
+
+    // Overloaded method for today's status (backward compatibility)
+    public Map<String, Object> getPunchStatus(String employeeId) {
+        return getPunchStatus(employeeId, LocalDate.now());
+    }
+ // Punch-In Eligibility for any specific date
+    public boolean isPunchInEnabledForDate(String employeeId, LocalDate date) {
+        LocalTime now = LocalTime.now();
+        
+        // Check if employee exists
+        Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+        if (employeeOpt.isEmpty()) {
+            return false;
+        }
+        
+        // Get department settings
+        DepartmentSettings settings = getDepartmentSettings(employeeId);
+        
+        // Check if the date is a holiday
+        Optional<Holiday> holiday = holidayRepository.findByDate(date);
+        boolean isHoliday = holiday.isPresent();
+        
+        // Check if OT is allocated for this employee on holiday
+        boolean isOtAllocated = false;
+        if (isHoliday) {
+            isOtAllocated = overtimeRepository.existsByEmployeeEmployeeIdAndDate(employeeId, date);
+        }
+        
+        // Check if employee is on leave on this date
+        boolean isOnLeave = isEmployeeOnLeave(employeeId, date);
+        
+        // Check if it's a working day (Monday to Friday)
+        DayOfWeek dayOfWeek = date.getDayOfWeek();
+        boolean isWorkingDay = dayOfWeek != DayOfWeek.SUNDAY;
+        
+        // Check time condition (after punch_in_start time)
+        boolean isAfterPunchInStart = !now.isBefore(settings.getPunchInStart());
+        boolean isBeforePunchOutEnd = now.isBefore(settings.getPunchOutEnd());
+        
+        // Check if already punched in on this date
+        Optional<Attendance> dateAttendance = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, date);
+        boolean isAlreadyPunchedIn = dateAttendance.isPresent() && dateAttendance.get().getPunchInTime() != null;
+        boolean isAlreadyPunchedOut = dateAttendance.isPresent() && dateAttendance.get().getPunchOutTime() != null;
+        
+        // Punch In enabled conditions
+        boolean enabled = !isAlreadyPunchedIn && !isAlreadyPunchedOut &&
+               ((isWorkingDay && !isHoliday) || (isHoliday && isOtAllocated)) &&
+               isAfterPunchInStart && !isOnLeave;
+        
+        return enabled;
+    }
+}

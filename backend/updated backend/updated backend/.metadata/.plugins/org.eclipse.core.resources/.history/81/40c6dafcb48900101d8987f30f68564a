@@ -1,0 +1,54 @@
+package com.example.demo.controller;
+
+import com.example.demo.model.Employee;
+import com.example.demo.model.User;
+import com.example.demo.model.UserRole;
+import com.example.demo.service.EmployeeService;
+import com.example.demo.service.EmailService; // ✅ import EmailService
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/employee-registration")
+@RequiredArgsConstructor
+public class EmployeeRegistrationController {
+
+    private final EmployeeService employeeService;
+    private final EmailService emailService; // ✅ inject EmailService
+
+    @PostMapping
+    public ResponseEntity<?> registerEmployee(@RequestBody Employee employee) {
+        try {
+            // Link nested objects
+            if (employee.getPersonalDetails() != null) employee.getPersonalDetails().setEmployee(employee);
+            if (employee.getBankDetails() != null) employee.getBankDetails().setEmployee(employee);
+            if (employee.getExperienceDetails() != null)
+                employee.getExperienceDetails().forEach(exp -> exp.setEmployee(employee));
+            if (employee.getJobDetails() != null) employee.getJobDetails().setEmployee(employee);
+
+            // Default User setup
+            if (employee.getUser() != null && employee.getUser().getEmail() != null) {
+                User user = employee.getUser();
+                if (user.getPassword() == null || user.getPassword().isEmpty()) user.setPassword("default123");
+                if (user.getRole() == null) user.setRole(UserRole.EMPLOYEE);
+                if (user.getEnabled() == null) user.setEnabled(true);
+            }
+
+            // Save employee
+            Employee savedEmployee = employeeService.addEmployee(employee);
+
+            // ✅ Send welcome email
+            emailService.sendWelcomeEmail(savedEmployee);
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(savedEmployee);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to register employee: " + e.getMessage()));
+        }
+    }
+}

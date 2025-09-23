@@ -1,0 +1,56 @@
+package com.example.demo.controller;
+
+import com.example.demo.model.Notice;
+import com.example.demo.repository.NoticeRepository;
+import com.example.demo.service.NotificationService;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/notices")
+@CrossOrigin(origins = {"http://localhost:5173", "http://localhost:3000"})
+public class NoticeController {
+
+    @Autowired
+    private NoticeRepository noticeRepo;
+
+    @Autowired
+    private NotificationService notificationService;
+
+    @GetMapping
+    public List<Notice> getAll() {
+        return noticeRepo.findAll();
+    }
+
+    // ✅ Single POST method with notification
+    @PostMapping
+    public ResponseEntity<Notice> createNotice(@RequestBody Notice notice) {
+        Notice savedNotice = noticeRepo.save(notice);
+        notificationService.saveNotification("New notice posted: " + notice.getTitle());
+        return new ResponseEntity<>(savedNotice, HttpStatus.CREATED);
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<Notice> update(@PathVariable Long id, @RequestBody Notice n) {
+        return noticeRepo.findById(id).map(existing -> {
+            existing.setTitle(n.getTitle());
+            existing.setMessage(n.getMessage());
+            existing.setAuthor(n.getAuthor());
+            existing.setDate(n.getDate());
+            return ResponseEntity.ok(noticeRepo.save(existing));
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> delete(@PathVariable Long id) {
+        return noticeRepo.findById(id).map(n -> {
+            noticeRepo.delete(n);
+            return ResponseEntity.ok().build();
+        }).orElse(ResponseEntity.notFound().build());
+    }
+}

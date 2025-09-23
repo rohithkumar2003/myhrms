@@ -1,0 +1,45 @@
+package com.example.demo.repository;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+import com.example.demo.model.Employee;
+import java.util.List;
+import java.util.Optional;
+
+public interface EmployeeRepository extends JpaRepository<Employee, String> {
+    List<Employee> findByIsActive(Boolean isActive);
+ // Add these methods to your existing EmployeeRepository interface
+
+    List<Employee> findByNameContaining(String name);
+
+  
+    // For employee search with department filter
+    @Query("SELECT e FROM Employee e JOIN e.experienceDetails exp " +
+           "WHERE (LOWER(e.employeeId) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(e.name) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(e.email) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "AND exp.department = :department AND exp.lastWorkingDate = 'Present'")
+    List<Employee> searchEmployeesByDepartment(@Param("query") String query, @Param("department") String department);
+ // Add to your existing EmployeeRepository interface
+   
+    @Query("SELECT e FROM Employee e WHERE " +
+           "LOWER(e.employeeId) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(e.name) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(e.email) LIKE LOWER(CONCAT('%', :query, '%'))")
+    List<Employee> searchEmployees(@Param("query") String query);
+ 
+    
+    @Query("SELECT DISTINCT e.department FROM Experience e WHERE e.lastWorkingDate = 'Present'")
+    List<String> findAllCurrentDepartments();
+    
+    @Query("SELECT e FROM Employee e JOIN e.experienceDetails exp " +
+           "WHERE exp.department = :department AND exp.lastWorkingDate = 'Present'")
+    List<Employee> findByCurrentDepartment(@Param("department") String department);
+ 
+    
+    
+
+	Optional<Employee> findTopByOrderByEmployeeIdDesc();
+}

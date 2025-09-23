@@ -1,0 +1,86 @@
+package com.example.demo.dto;
+
+import java.util.List;
+import java.util.stream.Collectors;
+ // Use this instead of jakarta
+import com.example.demo.model.Employee;
+import com.example.demo.model.Employee.EmployeeType;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class EmployeeDTO {
+    private String employeeId;
+    private String name;
+    private String email;
+    private String phone;
+    private String address;
+    private String emergencyContact;
+    private Boolean isActive;
+    
+    private PersonalDetailsDTO personalDetails;
+    private BankDetailsDTO bankDetails;
+    private List<ExperienceDTO> experienceDetails;
+    
+    
+    private EmployeeType typeOfEmployee;  // Add this field
+    
+    // Convert from Entity to DTO
+    public static EmployeeDTO fromEntity(Employee employee) {
+        return EmployeeDTO.builder()
+                .employeeId(employee.getEmployeeId())
+                .name(employee.getName())
+                .email(employee.getEmail())
+                .phone(employee.getPhone())
+                .address(employee.getAddress())
+                .typeOfEmployee(employee.getTypeOfEmployee())  
+                .emergencyContact(employee.getEmergencyContact())
+                .isActive(employee.getIsActive())
+                .personalDetails(PersonalDetailsDTO.fromEntity(employee.getPersonalDetails()))
+                .bankDetails(BankDetailsDTO.fromEntity(employee.getBankDetails()))
+                .experienceDetails(employee.getExperienceDetails() != null ? 
+                        employee.getExperienceDetails().stream()
+                                .map(ExperienceDTO::fromEntity)
+                                .collect(Collectors.toList()) : null)
+                // Add this line
+                .build();
+    }
+    
+    // Convert to Entity from DTO
+    public Employee toEntity() {
+        Employee employee = Employee.builder()
+                .employeeId(this.employeeId)
+                .name(this.name)
+                .email(this.email)
+                .phone(this.phone)
+                .address(this.address)
+                .emergencyContact(this.emergencyContact)
+                .isActive(this.isActive)
+                .personalDetails(this.personalDetails != null ? this.personalDetails.toEntity() : null)
+                .bankDetails(this.bankDetails != null ? this.bankDetails.toEntity() : null)
+                .experienceDetails(this.experienceDetails != null ? 
+                        this.experienceDetails.stream()
+                                .map(ExperienceDTO::toEntity)
+                                .collect(Collectors.toList()) : null)
+                .build();
+        
+        // Set employee reference in nested objects
+        if (employee.getPersonalDetails() != null) {
+            employee.getPersonalDetails().setEmployee(employee);
+        }
+        if (employee.getBankDetails() != null) {
+            employee.getBankDetails().setEmployee(employee);
+        }
+        if (employee.getExperienceDetails() != null) {
+            employee.getExperienceDetails().forEach(exp -> exp.setEmployee(employee));
+        }
+        
+        return employee;
+    }
+}

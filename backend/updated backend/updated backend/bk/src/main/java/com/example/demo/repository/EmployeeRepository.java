@@ -1,0 +1,50 @@
+package com.example.demo.repository;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+import com.example.demo.model.Employee;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface EmployeeRepository extends JpaRepository<Employee, String> {
+
+    // Get all active/inactive employees
+    List<Employee> findByIsActive(Boolean isActive);
+
+    // Search employees by name containing a string
+    List<Employee> findByNameContaining(String name);
+
+    // Search employees by query and department (lastWorkingDate = 'Present')
+    @Query("SELECT DISTINCT e FROM Employee e JOIN e.experienceDetails exp " +
+           "WHERE (LOWER(e.employeeId) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(e.name) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "AND exp.department = :department AND exp.lastWorkingDate = 'Present'")
+    List<Employee> searchEmployeesByDepartment(@Param("query") String query, @Param("department") String department);
+
+    // Search employees by query without department filter
+    @Query("SELECT e FROM Employee e WHERE " +
+           "LOWER(e.employeeId) LIKE LOWER(CONCAT('%', :query, '%')) OR " +
+           "LOWER(e.name) LIKE LOWER(CONCAT('%', :query, '%'))")
+    List<Employee> searchEmployees(@Param("query") String query);
+
+    // Get all current departments (from experience)
+    @Query("SELECT DISTINCT exp.department FROM Experience exp WHERE exp.lastWorkingDate = 'Present'")
+    List<String> findAllCurrentDepartments();
+
+    // Get employees by current department
+    @Query("SELECT DISTINCT e FROM Employee e JOIN e.experienceDetails exp " +
+           "WHERE exp.department = :department AND exp.lastWorkingDate = 'Present'")
+    List<Employee> findByCurrentDepartment(@Param("department") String department);
+
+    // Get the latest employee by ID
+    Optional<Employee> findTopByOrderByEmployeeIdDesc();
+    Optional<Employee> findByUserEmail(String email);
+  
+    @Query("SELECT e.employeeId FROM Employee e WHERE e.isActive = true")
+    List<String> findAllEmployeeIds();
+    Optional<Employee> findByEmployeeId(String employeeId);
+}

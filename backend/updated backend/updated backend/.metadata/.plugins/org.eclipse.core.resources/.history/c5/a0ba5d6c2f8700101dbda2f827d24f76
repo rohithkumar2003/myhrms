@@ -1,0 +1,54 @@
+package com.example.demo.service;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+import com.example.demo.dto.EmployeeRegistrationRequest;
+import com.example.demo.model.Employee;
+import com.example.demo.model.Role;
+import com.example.demo.model.User;
+import com.example.demo.repository.EmployeeRepository;
+import com.example.demo.repository.UserRepository;
+
+import lombok.RequiredArgsConstructor;
+
+@Service
+@RequiredArgsConstructor
+public class EmployeeService {
+
+    private final EmployeeRepository employeeRepository;
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+
+    public Employee addEmployeeWithUser(EmployeeRegistrationRequest request) {
+        // 1. Save employee first
+        Employee savedEmployee = employeeRepository.save(request.getEmployee());
+
+        // 2. Create linked user
+        User user = User.builder()
+                .email(request.getEmail())
+                .password(passwordEncoder.encode(request.getPassword()))
+                .role(Role.EMPLOYEE)
+                .employee(savedEmployee)
+                .build();
+
+        userRepository.save(user);
+
+        return savedEmployee;
+    }
+
+    public Optional<Employee> getEmployeeById(Long id) {
+        return employeeRepository.findById(id);
+    }
+
+    public List<Employee> getAllEmployees() {
+        return employeeRepository.findAll();
+    }
+
+    public void deleteEmployee(Long id) {
+        employeeRepository.deleteById(id);
+    }
+}

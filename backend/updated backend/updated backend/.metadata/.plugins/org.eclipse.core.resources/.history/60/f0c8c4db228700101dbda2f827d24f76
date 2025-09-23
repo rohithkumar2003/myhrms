@@ -1,0 +1,290 @@
+package com.example.demo.model;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
+
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.OneToOne;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Entity
+
+@Table(name = "employees")
+
+@NoArgsConstructor
+@AllArgsConstructor
+
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"}) 
+
+
+@Getter // Add this
+@Setter // Add this
+
+
+public class Employee {
+    @Id
+    @Column(name = "employee_id")
+    private String employeeId;
+    
+    private String name;
+    @Column(name = "email", unique = true)
+    private String email;
+
+    @Column(name="phone",unique=true)
+    private String phone;
+    
+    private String address;
+    
+    @Column(name = "emergency_contact_phone")
+    private String emergencyContactphone;
+    
+    private String emergencyContactName;
+    
+    private String emergencyContactRelation;
+    
+    @Column(name = "ot_pending_days")
+    private Integer otPendingDays = 0;
+    
+    @Column(name = "ot_incentive_days") 
+    private Integer otIncentiveDays = 0;
+    
+    @Column(name = "total_worked_days")
+    private Integer totalWorkedDays = 0;
+    
+    @Column(name = "worked_days")
+    private Integer workedDays = 0;
+    
+    @Column(name = "is_active")
+    private Boolean isActive;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "type_of_employee", length = 20)
+
+    private EmployeeType typeOfEmployee;
+    
+    @OneToOne(mappedBy = "employee", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference("employee-personal")
+    private PersonalDetails personalDetails;
+    
+    @OneToOne(mappedBy = "employee", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference("employee-bank")
+    private BankDetails bankDetails;
+ // In Employee.java, add this field and methods:
+    @OneToOne(mappedBy = "employee", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference("employee-job")
+    private JobDetails jobDetails;
+
+    // Add getter and setter for jobDetails
+    public JobDetails getJobDetails() {
+        return jobDetails;
+    }
+
+    public void setJobDetails(JobDetails jobDetails) {
+        this.jobDetails = jobDetails;
+        if (jobDetails != null) {
+            jobDetails.setEmployee(this);
+        }
+    }
+    
+    @OneToMany(mappedBy = "employee", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference("employee-experience")
+
+    private List<Experience> experienceDetails;
+    
+    @CreationTimestamp
+    @Column(name = "created_at", updatable = false)
+    private LocalDateTime createdAt;
+    
+    @UpdateTimestamp
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+    
+    // Add the missing relationshdf3ip to Overtime
+    @OneToMany(mappedBy = "employee", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonManagedReference("employee-overtime")
+    private List<Overtime> overtimeRecords;
+    
+    public enum EmployeeType {
+        FULL_TIME, PART_TIME, CONTRACT, INTERN
+    }
+    
+    // Getters and Setters - ADD THE MISSING SETTERS
+    public String getEmployeeId() { return employeeId; }
+    public void setEmployeeId(String employeeId) { this.employeeId = employeeId; }
+    
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public String getPhone() { return phone; }
+    public void setPhone(String phone) { this.phone = phone; }
+    
+    public String getAddress() { return address; }
+    public void setAddress(String address) { this.address = address; }
+    
+    public String getEmergencyContact() { return emergencyContactName; }
+    public void setEmergencyContact(String emergencyContact) { this.emergencyContactName = emergencyContact; }
+    
+    public Integer getOtPendingDays() { return otPendingDays; }
+    public void setOtPendingDays(Integer otPendingDays) { this.otPendingDays = otPendingDays; }
+    
+    public Integer getOtIncentiveDays() { return otIncentiveDays; }
+    public void setOtIncentiveDays(Integer otIncentiveDays) { 
+        this.otIncentiveDays = otIncentiveDays; 
+        // Auto-update total worked days when incentive days change
+        updateTotalWorkedDays();
+    }
+    
+    public Integer getTotalWorkedDays() { return totalWorkedDays; }
+    // ✅ ADD THIS MISSING SETTER
+    public void setTotalWorkedDays(Integer totalWorkedDays) { 
+        this.totalWorkedDays = totalWorkedDays; 
+    }
+    
+    public Integer getWorkedDays() { return workedDays; }
+    public void setWorkedDays(Integer workedDays) {
+        this.workedDays = workedDays != null ? workedDays : 0;
+        updateTotalWorkedDays();
+    }
+    
+    public Boolean getIsActive() { return isActive; }
+    public void setIsActive(Boolean isActive) { this.isActive = isActive; }
+    
+    public EmployeeType getTypeOfEmployee() { return typeOfEmployee; }
+    public void setTypeOfEmployee(EmployeeType typeOfEmployee) { this.typeOfEmployee = typeOfEmployee; }
+    
+    public PersonalDetails getPersonalDetails() { return personalDetails; }
+    public void setPersonalDetails(PersonalDetails personalDetails) { this.personalDetails = personalDetails; }
+    
+    public BankDetails getBankDetails() { return bankDetails; }
+    public void setBankDetails(BankDetails bankDetails) { this.bankDetails = bankDetails; }
+    
+    public List<Experience> getExperienceDetails() { return experienceDetails; }
+    public void setExperienceDetails(List<Experience> experienceDetails) { this.experienceDetails = experienceDetails; }
+    
+    public List<Overtime> getOvertimeRecords() { return overtimeRecords; }
+    public void setOvertimeRecords(List<Overtime> overtimeRecords) { this.overtimeRecords = overtimeRecords; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    
+    // Helper method to update total worked days
+    private void updateTotalWorkedDays() {
+        int worked = this.workedDays != null ? this.workedDays : 0;
+        int incentive = this.otIncentiveDays != null ? this.otIncentiveDays : 0;
+        this.totalWorkedDays = worked + incentive;
+        System.out.println("🔄 Auto-calculated totalWorkedDays: " + this.totalWorkedDays + " = " + worked + " + " + incentive);
+    }
+    
+    @Transient
+    public Integer calculateTotalWorkedDays() {
+        return (workedDays != null ? workedDays : 0) + 
+               (otIncentiveDays != null ? otIncentiveDays : 0);
+    }
+    
+    // Helper methods
+    public void incrementOtPendingDays() {
+        this.otPendingDays = (this.otPendingDays == null) ? 1 : this.otPendingDays + 1;
+    }
+    
+    public void incrementOtIncentiveDays() {
+        this.otIncentiveDays = (this.otIncentiveDays == null) ? 1 : this.otIncentiveDays + 1;
+        updateTotalWorkedDays();
+    }
+    
+    public void incrementTotalWorkedDays() {
+        this.totalWorkedDays = (this.totalWorkedDays == null) ? 1 : this.totalWorkedDays + 1;
+    }
+    
+    // Builder pattern methods
+    public static EmployeeBuilder builder() {
+        return new EmployeeBuilder();
+    }
+    
+    // Builder class
+    public static class EmployeeBuilder {
+        private String employeeId;
+        private String name;
+        private String email;
+        private String phone;
+        private String address;
+        private String emergencyContact;
+        private Integer otPendingDays = 0;
+        private Integer otIncentiveDays = 0;
+        private Integer totalWorkedDays = 0;
+        private Integer workedDays = 0;
+        private Boolean isActive;
+        private EmployeeType typeOfEmployee;
+        private PersonalDetails personalDetails;
+        private BankDetails bankDetails;
+        private List<Experience> experienceDetails;
+        private List<Overtime> overtimeRecords;
+        private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
+        
+        public EmployeeBuilder employeeId(String employeeId) { this.employeeId = employeeId; return this; }
+        public EmployeeBuilder name(String name) { this.name = name; return this; }
+        public EmployeeBuilder email(String email) { this.email = email; return this; }
+        public EmployeeBuilder phone(String phone) { this.phone = phone; return this; }
+        public EmployeeBuilder address(String address) { this.address = address; return this; }
+        public EmployeeBuilder emergencyContact(String emergencyContact) { this.emergencyContact = emergencyContact; return this; }
+        public EmployeeBuilder otPendingDays(Integer otPendingDays) { this.otPendingDays = otPendingDays; return this; }
+        public EmployeeBuilder otIncentiveDays(Integer otIncentiveDays) { this.otIncentiveDays = otIncentiveDays; return this; }
+        public EmployeeBuilder totalWorkedDays(Integer totalWorkedDays) { this.totalWorkedDays = totalWorkedDays; return this; }
+        public EmployeeBuilder workedDays(Integer workedDays) { this.workedDays = workedDays; return this; }
+        public EmployeeBuilder isActive(Boolean isActive) { this.isActive = isActive; return this; }
+        public EmployeeBuilder typeOfEmployee(EmployeeType typeOfEmployee) { this.typeOfEmployee = typeOfEmployee; return this; }
+        public EmployeeBuilder personalDetails(PersonalDetails personalDetails) { this.personalDetails = personalDetails; return this; }
+        public EmployeeBuilder bankDetails(BankDetails bankDetails) { this.bankDetails = bankDetails; return this; }
+        public EmployeeBuilder experienceDetails(List<Experience> experienceDetails) { this.experienceDetails = experienceDetails; return this; }
+        public EmployeeBuilder overtimeRecords(List<Overtime> overtimeRecords) { this.overtimeRecords = overtimeRecords; return this; }
+        public EmployeeBuilder createdAt(LocalDateTime createdAt) { this.createdAt = createdAt; return this; }
+        public EmployeeBuilder updatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; return this; }
+        
+        public Employee build() {
+            Employee employee = new Employee();
+            employee.employeeId = this.employeeId;
+            employee.name = this.name;
+            employee.email = this.email;
+            employee.phone = this.phone;
+            employee.address = this.address;
+            employee.emergencyContactName = this.emergencyContact;
+            employee.otPendingDays = this.otPendingDays;
+            employee.otIncentiveDays = this.otIncentiveDays;
+            employee.totalWorkedDays = this.totalWorkedDays;
+            employee.workedDays = this.workedDays;
+            employee.isActive = this.isActive;
+            employee.typeOfEmployee = this.typeOfEmployee;
+            employee.personalDetails = this.personalDetails;
+            employee.bankDetails = this.bankDetails;
+            employee.experienceDetails = this.experienceDetails;
+            employee.overtimeRecords = this.overtimeRecords;
+            employee.createdAt = this.createdAt;
+            employee.updatedAt = this.updatedAt;
+            return employee;
+        }
+    }
+}

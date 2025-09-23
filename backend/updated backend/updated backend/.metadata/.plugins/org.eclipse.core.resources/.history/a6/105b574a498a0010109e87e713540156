@@ -1,0 +1,248 @@
+package com.example.demo.service;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.example.demo.model.Attendance;
+import com.example.demo.model.DepartmentSettings;
+import com.example.demo.model.Employee;
+import com.example.demo.model.PermissionHours;
+import com.example.demo.model.PermissionStatus;
+import com.example.demo.repository.AttendanceRepository;
+import com.example.demo.repository.DepartmentSettingsRepository;
+import com.example.demo.repository.EmployeeRepository;
+import com.example.demo.repository.PermissionHourRepository;
+
+@Service
+public class PermissionHoursService {
+    
+    private final PermissionHourRepository repository;
+    private final AttendanceRepository attendanceRepository;
+    private final EmployeeRepository employeeRepository;
+    private final DepartmentSettingsRepository departmentSettingsRepository;
+
+    public PermissionHoursService(PermissionHourRepository repository,
+                                 AttendanceRepository attendanceRepository,
+                                 EmployeeRepository employeeRepository,
+                                 DepartmentSettingsRepository departmentSettingsRepository) {
+        this.repository = repository;
+        this.attendanceRepository = attendanceRepository;
+        this.employeeRepository = employeeRepository;
+        this.departmentSettingsRepository = departmentSettingsRepository;
+    }
+
+    // ... [Keep all your existing methods unchanged until adjustAttendanceForPermissionHours] ...
+
+    // Adjust attendance based on approved permission hours
+    private void adjustAttendanceForPermissionHours(PermissionHours permissionHours) {
+        String employeeId = permissionHours.getEmployeeId();
+        LocalDate date = permissionHours.getDate();
+        LocalTime fromTime = permissionHours.getFromTime();
+        LocalTime toTime = permissionHours.getToTime();
+        
+        try {
+            // Get the existing attendance record
+            Optional<Attendance> attendanceOpt = attendanceRepository.findByEmployeeEmployeeIdAndDate(employeeId, date);
+            
+            if (attendanceOpt.isPresent()) {
+                Attendance attendance = attendanceOpt.get();
+                
+                // Store original times for comparison
+                LocalDateTime originalPunchIn = attendance.getPunchInTime();
+                LocalDateTime originalPunchOut = attendance.getPunchOutTime();
+                
+                boolean needsRecalculation = false;
+                
+                // Adjust punch in time if permission fromTime is earlier
+                if (originalPunchIn != null && fromTime.isBefore(originalPunchIn.toLocalTime())) {
+                    LocalDateTime newPunchInTime = LocalDateTime.of(date, fromTime);
+                    attendance.setPunchInTime(newPunchInTime);
+                    needsRecalculation = true;
+                    System.out.println("DEBUG: Adjusted punch-in from " + originalPunchIn + " to " + newPunchInTime);
+                }
+                
+                // Adjust punch out time if permission toTime is later
+                if (originalPunchOut != null && toTime.isAfter(originalPunchOut.toLocalTime())) {
+                    LocalDateTime newPunchOutTime = LocalDateTime.of(date, toTime);
+                    attendance.setPunchOutTime(newPunchOutTime);
+                    needsRecalculation = true;
+                    System.out.println("DEBUG: Adjusted punch-out from " + originalPunchOut + " to " + newPunchOutTime);
+                }
+                
+                // If adjustments were made, recalculate all attendance fields
+                if (needsRecalculation) {
+                    // Recalculate hours worked
+                    Duration duration = Duration.between(attendance.getPunchInTime(), attendance.getPunchOutTime());
+                    double hoursWorked = duration.toMinutes() / 60.0;
+                    attendance.setHoursWorked(hoursWorked);
+                    
+                    // CRITICAL: Reset ALL status fields before complete recalculation
+                    resetAttendanceStatusFields(attendance);
+                    
+                    // Recalculate ALL attendance status from scratch
+                    recalculateFullAttendanceStatus(attendance);
+                    
+                    attendanceRepository.save(attendance);
+                    
+                    System.out.println("DEBUG: Attendance fully recalculated after permission approval");
+                    System.out.println("DEBUG: Final status: " + attendance.getStatus());
+                    System.out.println("DEBUG: Final hours: " + attendance.getHoursWorked());
+                }
+            } else {
+                // Create new attendance record if none exists
+                LocalDateTime punchInTime = LocalDateTime.of(date, fromTime);
+                LocalDateTime punchOutTime = LocalDateTime.of(date, toTime);
+                
+                // Get employee
+                Employee employee = employeeRepository.findById(employeeId)
+                    .orElseThrow(() -> new RuntimeException("Employee not found: " + employeeId));
+                
+                // Create attendance using your existing constructor
+                Attendance attendance = new Attendance(employee, date);
+                attendance.setPunchInTime(punchInTime);
+                attendance.setPunchOutTime(punchOutTime);
+                
+                // Calculate hours worked
+                Duration duration = Duration.between(punchInTime, punchOutTime);
+                double hoursWorked = duration.toMinutes() / 60.0;
+                attendance.setHoursWorked(hoursWorked);
+                
+                // Calculate full status including late login
+                recalculateFullAttendanceStatus(attendance);
+                
+                attendanceRepository.save(attendance);
+                
+                System.out.println("DEBUG: New attendance created with permission hours");
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to adjust attendance for permission hours: " + e.getMessage(), e);
+        }
+    }
+
+    // Reset all calculated status fields to ensure fresh calculation
+    private void resetAttendanceStatusFields(Attendance attendance) {
+        attendance.setStatus(null);
+        attendance.setIsLateLogin(false);
+        attendance.setIdleTime(0.0);
+        attendance.setRemarks("Updated from permission hours approval");
+        System.out.println("DEBUG: Reset all status fields for fresh calculation");
+    }
+
+    // New method to fully recalculate attendance status from scratch
+    private void recalculateFullAttendanceStatus(Attendance attendance) {
+        System.out.println("=== STARTING COMPLETE STATUS RECALCULATION ===");
+        System.out.println("Input - PunchIn: " + attendance.getPunchInTime() + 
+                          ", PunchOut: " + attendance.getPunchOutTime() +
+                          ", Hours: " + attendance.getHoursWorked());
+        
+        // Get department settings directly
+        DepartmentSettings settings = getDepartmentSettingsDirectly(attendance.getEmployee().getEmployeeId());
+        
+        // Manual status calculation
+        calculateAttendanceStatusManually(attendance, settings);
+        
+        // Then specifically recalculate late login status
+        recalculateLateLoginStatus(attendance, settings);
+        
+        System.out.println("=== RECALCULATION COMPLETE ===");
+        System.out.println("Final Status: " + attendance.getStatus());
+        System.out.println("Final Hours: " + attendance.getHoursWorked());
+        System.out.println("Is Late Login: " + attendance.getIsLateLogin());
+        System.out.println("Idle Time: " + attendance.getIdleTime());
+    }
+
+    // Get department settings directly from repository
+    private DepartmentSettings getDepartmentSettingsDirectly(String employeeId) {
+        try {
+            Employee employee = employeeRepository.findById(employeeId)
+                .orElseThrow(() -> new RuntimeException("Employee not found: " + employeeId));
+            
+            if (employee.getJobDetails() != null && employee.getJobDetails().getDeptId() != null) {
+                return departmentSettingsRepository.findByDepartmentId(employee.getJobDetails().getDeptId())
+                    .orElse(getDefaultDepartmentSettings());
+            }
+        } catch (Exception e) {
+            System.out.println("Error getting department settings: " + e.getMessage());
+        }
+        return getDefaultDepartmentSettings();
+    }
+
+    // Default department settings fallback
+    private DepartmentSettings getDefaultDepartmentSettings() {
+        DepartmentSettings defaultSettings = new DepartmentSettings();
+        defaultSettings.setHalfDayThreshold(4.0);
+        defaultSettings.setFullDayThreshold(8.0);
+        defaultSettings.setLateLoginThreshold(LocalTime.of(9, 30));
+        return defaultSettings;
+    }
+
+    // Manual attendance status calculation
+    private void calculateAttendanceStatusManually(Attendance attendance, DepartmentSettings settings) {
+        double hoursWorked = attendance.getHoursWorked();
+        
+        if (hoursWorked < settings.getHalfDayThreshold()) {
+            attendance.setStatus("Absent");
+            attendance.setIdleTime(settings.getFullDayThreshold());
+        } else if (hoursWorked >= settings.getHalfDayThreshold() && hoursWorked < settings.getFullDayThreshold()) {
+            attendance.setStatus("Half Day");
+            attendance.setIdleTime(settings.getFullDayThreshold() - hoursWorked);
+        } else {
+            attendance.setStatus("Present (On Time)");
+            attendance.setIdleTime(Math.max(0, settings.getFullDayThreshold() - hoursWorked));
+        }
+    }
+
+    // Method to specifically recalculate late login status
+    private void recalculateLateLoginStatus(Attendance attendance, DepartmentSettings settings) {
+        if (attendance.getPunchInTime() == null) {
+            attendance.setIsLateLogin(false);
+            return;
+        }
+        
+        LocalTime punchInTime = attendance.getPunchInTime().toLocalTime();
+        boolean isLateLogin = punchInTime.isAfter(settings.getLateLoginThreshold());
+        attendance.setIsLateLogin(isLateLogin);
+        
+        System.out.println("DEBUG: Late login calculation - " + 
+                          "PunchIn: " + punchInTime + 
+                          ", Threshold: " + settings.getLateLoginThreshold() +
+                          ", IsLate: " + isLateLogin);
+    }
+
+    // Force recalculation method to bypass any bugs
+    private void forceRecalculateAttendanceStatus(Attendance attendance) {
+        try {
+            // Get fresh department settings
+            DepartmentSettings settings = getDepartmentSettingsDirectly(attendance.getEmployee().getEmployeeId());
+            
+            double hoursWorked = attendance.getHoursWorked();
+            System.out.println("FORCE RECALCULATION - Hours: " + hoursWorked + 
+                              ", HalfDayThresh: " + settings.getHalfDayThreshold() +
+                              ", FullDayThresh: " + settings.getFullDayThreshold());
+            
+            // Manual status calculation
+            calculateAttendanceStatusManually(attendance, settings);
+            
+            // Recalculate late login
+            if (attendance.getPunchInTime() != null) {
+                LocalTime punchInTime = attendance.getPunchInTime().toLocalTime();
+                boolean isLateLogin = punchInTime.isAfter(settings.getLateLoginThreshold());
+                attendance.setIsLateLogin(isLateLogin);
+            }
+            
+            System.out.println("FORCE RECALCULATION RESULT: " + attendance.getStatus());
+            
+        } catch (Exception e) {
+            System.out.println("Error in force recalculation: " + e.getMessage());
+            // Fallback to manual calculation with default settings
+            calculateAttendanceStatusManually(attendance, getDefaultDepartmentSettings());
+        }
+    }
+}

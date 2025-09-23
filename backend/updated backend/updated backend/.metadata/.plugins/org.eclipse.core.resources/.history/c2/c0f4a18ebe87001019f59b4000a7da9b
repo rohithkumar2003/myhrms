@@ -1,0 +1,291 @@
+package com.example.demo.service;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.List;
+
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.example.demo.exception.ResourceNotFoundException;
+import com.example.demo.model.BankDetails;
+import com.example.demo.model.Employee;
+import com.example.demo.model.Experience;
+import com.example.demo.model.JobDetails;
+import com.example.demo.model.PersonalDetails;
+import com.example.demo.model.Role;
+import com.example.demo.model.User;
+import com.example.demo.repository.BankDetailsRepository;
+import com.example.demo.repository.EmployeeRepository;
+import com.example.demo.repository.ExperienceRepository;
+import com.example.demo.repository.JobDetailsRepository;
+import com.example.demo.repository.PersonalDetailsRepository;
+import com.example.demo.repository.UserRepository;
+
+import lombok.RequiredArgsConstructor;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class EmployeeService {
+    private final EmployeeRepository employeeRepository;
+    private final ExperienceRepository experienceRepository;
+    private final BankDetailsRepository bankDetailsRepository;
+    private final PersonalDetailsRepository personalDetailsRepository;
+    private final JobDetailsRepository jobDetailsRepository;
+
+    // ✅ For user creation
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+
+    // -----------------------------
+    // Basic CRUD operations
+    // -----------------------------
+
+    public List<Employee> getAllEmployees() {
+        return employeeRepository.findAll();
+    }
+
+    public List<Employee> getActiveEmployees() {
+        return employeeRepository.findByIsActive(true);
+    }
+
+    public List<Employee> getInactiveEmployees() {
+        return employeeRepository.findByIsActive(false);
+    }
+
+    public List<String> getAllDepartments() {
+        return employeeRepository.findAllCurrentDepartments();
+    }
+
+    public List<Employee> getEmployeesByDepartment(String department) {
+        return employeeRepository.findByCurrentDepartment(department);
+    }
+
+    public List<Employee> searchEmployees(String query) {
+        return employeeRepository.searchEmployees(query);
+    }
+
+    public Employee getEmployeeById(String employeeId) {
+        return employeeRepository.findById(employeeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Employee not found with id: " + employeeId));
+    }
+
+    // -----------------------------
+    // Add Employee + User account
+    // -----------------------------
+    public Employee addEmployee(Employee employee) {
+        if (employee.getEmployeeId() == null || employee.getEmployeeId().isEmpty()) {
+            String lastId = employeeRepository.findTopByOrderByEmployeeIdDesc()
+                    .map(Employee::getEmployeeId)
+                    .orElse("EMP000");
+
+            int nextNum = Integer.parseInt(lastId.replace("EMP", "")) + 1;
+            employee.setEmployeeId("EMP" + String.format("%03d", nextNum));
+        }
+
+        if (employee.getExperienceDetails() != null) {
+            employee.getExperienceDetails().forEach(exp -> {
+                exp.setLastWorkingDate("Present");
+                exp.setEmployee(employee);
+            });
+        }
+
+        if (employee.getPersonalDetails() != null) {
+            employee.getPersonalDetails().setEmployee(employee);
+        }
+
+        if (employee.getBankDetails() != null) {
+            employee.getBankDetails().setEmployee(employee);
+        }
+
+        if (employee.getJobDetails() != null) {
+            employee.getJobDetails().setEmployee(employee);
+        }
+
+        Employee savedEmployee = employeeRepository.save(employee);
+
+        if (employee.getUser() != null
+                && employee.getUser().getEmail() != null
+                && employee.getUser().getPassword() != null) {
+
+            createUserForEmployee(savedEmployee,
+                    employee.getUser().getEmail(),
+                    employee.getUser().getPassword());
+        }
+
+        return savedEmployee;
+    }
+
+    public void createUserForEmployee(Employee employee, String email, String password) {
+        User user = User.builder()
+                .email(email)
+                .password(passwordEncoder.encode(password))
+                .role(Role.EMPLOYEE)
+                .employee(employee)
+                .build();
+
+        userRepository.save(user);
+    }
+
+    // ✅ Delete employee + linked user
+    public void deleteEmployee(String employeeId) {
+        Employee employee = getEmployeeById(employeeId);
+
+        if (employee.getUser() != null) {
+            userRepository.delete(employee.getUser());
+        }
+
+        employeeRepository.delete(employee);
+    }
+
+    // ✅ Get email from linked user
+    public String getEmployeeEmail(String employeeId) {
+        Employee employee = getEmployeeById(employeeId);
+        if (employee.getUser() != null) {
+            return employee.getUser().getEmail();
+        }
+        return null;
+    }
+
+    // -----------------------------
+    // Update Employee
+    // -----------------------------
+    public Employee updateEmployee(String employeeId, Employee employeeDetails) {
+        Employee employee = getEmployeeById(employeeId);
+
+        employee.setName(employeeDetails.getName());
+        employee.setPhone(employeeDetails.getPhone());
+        employee.setAddress(employeeDetails.getAddress());
+        employee.setEmergencyContactName(employeeDetails.getEmergencyContactName());
+        employee.setEmergencyContactphone(employeeDetails.getEmergencyContactphone());
+        employee.setEmergencyContactRelation(employeeDetails.getEmergencyContactRelation());
+
+        updatePersonalDetails(employee, employeeDetails);
+        updateBankDetails(employee, employeeDetails);
+        updateJobDetails(employee, employeeDetails);
+        updateExperienceDetails(employeeId, employee, employeeDetails);
+
+        return employeeRepository.save(employee);
+    }
+
+    // -----------------------------
+    // Update helpers
+    // -----------------------------
+    private void updatePersonalDetails(Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getPersonalDetails() != null) {
+            PersonalDetails newPersonal = employeeDetails.getPersonalDetails();
+            if (employee.getPersonalDetails() == null) {
+                employee.setPersonalDetails(new PersonalDetails());
+                employee.getPersonalDetails().setEmployee(employee);
+            }
+            employee.getPersonalDetails().setGender(newPersonal.getGender());
+            employee.getPersonalDetails().setDateofBirth(newPersonal.getDateofBirth());
+            employee.getPersonalDetails().setMaritalStatus(newPersonal.getMaritalStatus());
+            employee.getPersonalDetails().setNationality(newPersonal.getNationality());
+        }
+    }
+
+    private void updateBankDetails(Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getBankDetails() != null) {
+            BankDetails newBank = employeeDetails.getBankDetails();
+            if (employee.getBankDetails() == null) {
+                employee.setBankDetails(new BankDetails());
+                employee.getBankDetails().setEmployee(employee);
+            }
+            employee.getBankDetails().setBankName(newBank.getBankName());
+            employee.getBankDetails().setAccountNumber(newBank.getAccountNumber());
+            employee.getBankDetails().setIfscCode(newBank.getIfscCode());
+        }
+    }
+
+    private void updateJobDetails(Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getJobDetails() != null) {
+            JobDetails newJob = employeeDetails.getJobDetails();
+            if (employee.getJobDetails() == null) {
+                employee.setJobDetails(new JobDetails());
+                employee.getJobDetails().setEmployee(employee);
+            }
+            employee.getJobDetails().setDesignation(newJob.getDesignation());
+            employee.getJobDetails().setDepartment(newJob.getDepartment());
+            employee.getJobDetails().setJoiningDate(newJob.getJoiningDate());
+        }
+    }
+
+    private void updateExperienceDetails(String employeeId, Employee employee, Employee employeeDetails) {
+        if (employeeDetails.getExperienceDetails() != null) {
+            experienceRepository.deleteAll(experienceRepository.findByEmployeeEmployeeId(employeeId));
+            employee.getExperienceDetails().clear();
+
+            for (Experience exp : employeeDetails.getExperienceDetails()) {
+                exp.setEmployee(employee);
+                employee.getExperienceDetails().add(exp);
+            }
+        }
+    }
+
+    // -----------------------------
+    // Excel report
+    // -----------------------------
+    public byte[] generateEmployeeReport() throws IOException {
+        Workbook workbook = new XSSFWorkbook();
+        Sheet sheet = workbook.createSheet("Employees");
+
+        String[] headers = {
+                "Employee ID", "Name", "Phone", "Address", "Department", "Designation",
+                "Joining Date", "Status"
+        };
+
+        Font headerFont = workbook.createFont();
+        headerFont.setBold(true);
+        CellStyle headerCellStyle = workbook.createCellStyle();
+        headerCellStyle.setFont(headerFont);
+
+        Row headerRow = sheet.createRow(0);
+        for (int i = 0; i < headers.length; i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers[i]);
+            cell.setCellStyle(headerCellStyle);
+        }
+
+        List<Employee> employees = employeeRepository.findAll();
+        int rowNum = 1;
+        for (Employee employee : employees) {
+            Row row = sheet.createRow(rowNum++);
+            row.createCell(0).setCellValue(employee.getEmployeeId());
+            row.createCell(1).setCellValue(employee.getName());
+            row.createCell(2).setCellValue(employee.getPhone());
+            row.createCell(3).setCellValue(employee.getAddress());
+
+            if (employee.getJobDetails() != null) {
+                row.createCell(4).setCellValue(employee.getJobDetails().getDepartment());
+                row.createCell(5).setCellValue(employee.getJobDetails().getDesignation());
+                row.createCell(6).setCellValue(employee.getJobDetails().getJoiningDate().toString());
+            } else {
+                row.createCell(4).setCellValue("-");
+                row.createCell(5).setCellValue("-");
+                row.createCell(6).setCellValue("-");
+            }
+
+            row.createCell(7).setCellValue(employee.getIsActive() ? "Active" : "Inactive");
+        }
+
+        for (int i = 0; i < headers.length; i++) {
+            sheet.autoSizeColumn(i);
+        }
+
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        workbook.write(outputStream);
+        workbook.close();
+
+        return outputStream.toByteArray();
+    }
+}

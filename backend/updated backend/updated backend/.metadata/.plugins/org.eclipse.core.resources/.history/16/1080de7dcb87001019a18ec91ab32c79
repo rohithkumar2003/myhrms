@@ -1,0 +1,354 @@
+package com.example.demo.controller;
+
+import java.io.IOException;
+import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.example.demo.model.BankDetails;
+import com.example.demo.model.Employee;
+import com.example.demo.model.Experience;
+import com.example.demo.model.JobDetails;
+import com.example.demo.model.PersonalDetails;
+import com.example.demo.repository.EmployeeRepository;
+import com.example.demo.service.EmployeeService;
+
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+
+@RestController
+@RequestMapping("/api/employees")
+@RequiredArgsConstructor
+public class EmployeeController {
+
+    private final EmployeeService employeeService;
+    private final EmployeeRepository employeeRepository;
+
+    // ------------------- Employee Endpoints -------------------
+
+    @GetMapping
+    public ResponseEntity<List<Employee>> getAllEmployees(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String department,
+            @RequestParam(required = false) Boolean active) {
+
+        List<Employee> employees;
+
+        if (search != null && !search.isEmpty()) {
+            employees = employeeService.searchEmployees(search);
+        } else if (department != null && !department.isEmpty()) {
+            employees = employeeService.getEmployeesByDepartment(department);
+        } else if (active != null) {
+            employees = active ? employeeService.getActiveEmployees() : employeeService.getInactiveEmployees();
+        } else {
+            employees = employeeService.getAllEmployees();
+        }
+
+        return ResponseEntity.ok(employees);
+    }
+
+    @GetMapping("/{employeeId}")
+    public ResponseEntity<Employee> getEmployeeById(@PathVariable String employeeId) {
+        Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+        return employeeOpt.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping
+    public ResponseEntity<?> addEmployee(@RequestBody Employee employee) {
+        try {
+            // Set references
+            if (employee.getPersonalDetails() != null) {
+                employee.getPersonalDetails().setEmployee(employee);
+            }
+            if (employee.getBankDetails() != null) {
+                employee.getBankDetails().setEmployee(employee);
+            }
+            if (employee.getExperienceDetails() != null) {
+                employee.getExperienceDetails().forEach(exp -> exp.setEmployee(employee));
+            }
+
+            // Create employee
+            Employee savedEmployee = employeeService.addEmployee(employee);
+
+            // Create linked user if exists
+            if (employee.getUser() != null
+                    && employee.getUser().getEmail() != null
+                    && employee.getUser().getPassword() != null) {
+                employeeService.createUserForEmployee(savedEmployee,
+                  employee.getUser().getEmail(),
+                        employee.getUser().getPassword());
+            }
+  return ResponseEntity.status(HttpStatus.CREATED).body(savedEmployee);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to create employee: " + e.getMessage()));
+        }
+    }
+
+    @PutMapping("/{employeeId}")
+    public ResponseEntity<Employee> updateEmployee(
+            @PathVariable String employeeId,
+            @RequestBody Employee employeeDetails) {
+        return ResponseEntity.ok(employeeService.updateEmployee(employeeId, employeeDetails));
+    }
+
+    @DeleteMapping("/{employeeId}")
+    public ResponseEntity<Void> deleteEmployee(@PathVariable String employeeId) {
+        employeeService.deleteEmployee(employeeId);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ------------------- Extra Endpoints -------------------
+
+    @GetMapping("/test-employee-ot/{employeeId}")
+    public ResponseEntity<Map<String, Object>> testEmployeeOT(@PathVariable String employeeId) {
+        Map<String, Object> response = new HashMap<>();
+
+        Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+        if (employeeOpt.isPresent()) {
+            Employee employee = employeeOpt.get();
+            response.put("employeeId", employee.getEmployeeId());
+            response.put("name", employee.getName());
+            response.put("workedDays", employee.getWorkedDays());
+            response.put("otIncentiveDays", employee.getOtIncentiveDays());
+            response.put("otPendingDays", employee.getOtPendingDays());
+            response.put("totalWorkedDays", employee.getTotalWorkedDays());
+            response.put("status", "SUCCESS");
+        } else {
+            response.put("status", "EMPLOYEE_NOT_FOUND");
+        }
+
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/departments")
+    public ResponseEntity<List<String>> getAllDepartments() {
+        return ResponseEntity.ok(employeeService.getAllDepartments());
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<List<Employee>> searchEmployees(@RequestParam String q) {
+        return ResponseEntity.ok(employeeService.searchEmployees(q));
+    }
+
+    @GetMapping("/active")
+    public ResponseEntity<List<Employee>> getActiveEmployees() {
+        return ResponseEntity.ok(employeeService.getActiveEmployees());
+    }
+
+    @GetMapping("/inactive")
+    public ResponseEntity<List<Employee>> getInactiveEmployees() {
+        return ResponseEntity.ok(employeeService.getInactiveEmployees());
+    }
+
+    // ------------------- Bank Details -------------------
+
+    @GetMapping("/{employeeId}/bank-details")
+    public ResponseEntity<List<BankDetails>> getAllBankDetails(@PathVariable String employeeId) {
+        return ResponseEntity.ok(employeeService.getAllBankDetails(employeeId));
+    }
+
+    @GetMapping("/{employeeId}/bank-details/latest")
+    public ResponseEntity<BankDetails> getLatestBankDetails(@PathVariable String employeeId) {
+        return ResponseEntity.ok(employeeService.getBankDetails(employeeId));
+    }
+
+    @GetMapping("/{employeeId}/bank-details/first")
+    public ResponseEntity<BankDetails> getFirstBankDetails(@PathVariable String employeeId) {
+        return ResponseEntity.ok(employeeService.getFirstBankDetails(employeeId));
+    }
+
+    @PostMapping("/{employeeId}/bank-details")
+    public ResponseEntity<BankDetails> createBankDetails(
+            @PathVariable String employeeId,
+            @RequestBody BankDetails bankDetails) {
+        Employee employee = employeeService.getEmployeeById(employeeId);
+        bankDetails.setEmployee(employee);
+        return ResponseEntity.status(HttpStatus.CREATED).body(employeeService.saveBankDetails(bankDetails));
+    }
+
+    @PutMapping("/{employeeId}/bank-details")
+    public ResponseEntity<BankDetails> updateBankDetails(
+            @PathVariable String employeeId,
+            @RequestBody BankDetails bankDetails) {
+        BankDetails existingBankDetails = employeeService.getBankDetails(employeeId);
+        existingBankDetails.setAccountNumber(bankDetails.getAccountNumber());
+        existingBankDetails.setBankName(bankDetails.getBankName());
+        existingBankDetails.setIfscCode(bankDetails.getIfscCode());
+        existingBankDetails.setBranch(bankDetails.getBranch());
+        return ResponseEntity.ok(employeeService.saveBankDetails(existingBankDetails));
+    }
+
+    @DeleteMapping("/{employeeId}/bank-details")
+    public ResponseEntity<Void> deleteBankDetails(@PathVariable String employeeId) {
+        employeeService.deleteBankDetails(employeeId);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ------------------- Personal Details -------------------
+
+    @GetMapping("/{employeeId}/personal-details")
+    public ResponseEntity<PersonalDetails> getPersonalDetails(@PathVariable String employeeId) {
+        return ResponseEntity.ok(employeeService.getPersonalDetails(employeeId));
+    }
+
+    @PostMapping("/{employeeId}/personal-details")
+    public ResponseEntity<PersonalDetails> createPersonalDetails(
+            @PathVariable String employeeId,
+            @RequestBody PersonalDetails personalDetails) {
+        Employee employee = employeeService.getEmployeeById(employeeId);
+        personalDetails.setEmployee(employee);
+        return ResponseEntity.status(HttpStatus.CREATED).body(employeeService.savePersonalDetails(personalDetails));
+    }
+
+    @PutMapping("/{employeeId}/personal-details")
+    public ResponseEntity<PersonalDetails> updatePersonalDetails(
+            @PathVariable String employeeId,
+            @RequestBody PersonalDetails personalDetails) {
+        PersonalDetails existing = employeeService.getPersonalDetails(employeeId);
+        existing.setDateofBirth(personalDetails.getDateofBirth());
+        existing.setGender(personalDetails.getGender());
+        existing.setFatherName(personalDetails.getFatherName());
+        existing.setPanNumber(personalDetails.getPanNumber());
+        existing.setAadhaarNumber(personalDetails.getAadhaarNumber());
+        existing.setMaritalStatus(personalDetails.getMaritalStatus());
+        existing.setNationality(personalDetails.getNationality());
+        return ResponseEntity.ok(employeeService.savePersonalDetails(existing));
+    }
+
+    @DeleteMapping("/{employeeId}/personal-details")
+    public ResponseEntity<Void> deletePersonalDetails(@PathVariable String employeeId) {
+        employeeService.deletePersonalDetails(employeeId);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ------------------- Experience -------------------
+
+    @GetMapping("/{employeeId}/experience")
+    public ResponseEntity<List<Experience>> getExperienceDetails(@PathVariable String employeeId) {
+        return ResponseEntity.ok(employeeService.getExperienceDetails(employeeId));
+    }
+
+    @PostMapping("/{employeeId}/experience")
+    public ResponseEntity<Experience> createExperience(
+            @PathVariable String employeeId,
+            @RequestBody Experience experience) {
+        Employee employee = employeeService.getEmployeeById(employeeId);
+        experience.setEmployee(employee);
+        return ResponseEntity.status(HttpStatus.CREATED).body(employeeService.saveExperience(experience));
+    }
+
+    @DeleteMapping("/{employeeId}/experience")
+    public ResponseEntity<Void> deleteAllExperience(@PathVariable String employeeId) {
+        employeeService.deleteAllExperience(employeeId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/{employeeId}/experience/{experienceId}")
+    public ResponseEntity<Void> deleteExperienceById(
+            @PathVariable String employeeId,
+            @PathVariable Long experienceId) {
+        employeeService.deleteExperienceById(experienceId);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ------------------- Job Details -------------------
+
+    @GetMapping("/{employeeId}/job-details")
+    public ResponseEntity<JobDetails> getJobDetails(@PathVariable String employeeId) {
+        return ResponseEntity.ok(employeeService.getJobDetails(employeeId));
+    }
+
+    @PostMapping("/{employeeId}/job-details")
+    public ResponseEntity<JobDetails> createJobDetails(
+            @PathVariable String employeeId,
+            @RequestBody JobDetails jobDetails) {
+        Employee employee = employeeService.getEmployeeById(employeeId);
+        jobDetails.setEmployee(employee);
+        return ResponseEntity.status(HttpStatus.CREATED).body(employeeService.saveJobDetails(jobDetails));
+    }
+
+    @PutMapping("/{employeeId}/job-details")
+    public ResponseEntity<JobDetails> updateJobDetails(
+            @PathVariable String employeeId,
+            @RequestBody JobDetails jobDetails) {
+        JobDetails existing = employeeService.getJobDetails(employeeId);
+        existing.setDeptId(jobDetails.getDeptId());
+        existing.setDepartment(jobDetails.getDepartment());
+        existing.setDesignation(jobDetails.getDesignation());
+        existing.setDoj(jobDetails.getDoj());
+        return ResponseEntity.ok(employeeService.saveJobDetails(existing));
+    }
+
+    @DeleteMapping("/{employeeId}/job-details")
+    public ResponseEntity<Void> deleteJobDetails(@PathVariable String employeeId) {
+        employeeService.deleteJobDetails(employeeId);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ------------------- Status -------------------
+
+    @PatchMapping("/{employeeId}/deactivate")
+    public ResponseEntity<Void> deactivateEmployee(@PathVariable String employeeId) {
+        employeeService.deactivateEmployee(employeeId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PatchMapping("/{employeeId}/reactivate")
+    public ResponseEntity<Void> reactivateEmployee(
+            @PathVariable String employeeId,
+            @RequestParam String joiningDate) {
+        employeeService.reactivateEmployee(employeeId, LocalDate.parse(joiningDate));
+        return ResponseEntity.noContent().build();
+    }
+
+    // ------------------- Report -------------------
+
+    @GetMapping("/report")
+    public ResponseEntity<byte[]> generateEmployeeReport(
+            @RequestParam(required = false) Boolean active,
+            HttpServletResponse response) throws IOException {
+
+        List<Employee> employees = active != null
+                ? (active ? employeeService.getActiveEmployees() : employeeService.getInactiveEmployees())
+                : employeeService.getAllEmployees();
+
+        byte[] reportBytes = employeeService.generateEmployeeReport(employees);
+
+        String filename = active != null
+                ? (active ? "Active_Employees_Report.xlsx" : "Inactive_Employees_Report.xlsx")
+                : "All_Employees_Report.xlsx";
+
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setHeader("Content-Disposition", "attachment; filename=" + filename);
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(reportBytes);
+    }
+
+    // ------------------- Debug -------------------
+
+    @PostMapping("/test-raw")
+    public ResponseEntity<String> testRawJson(@RequestBody String rawJson) {
+        System.out.println("Raw JSON received: " + rawJson);
+        return ResponseEntity.ok("Raw JSON received successfully");
+    }
+}
