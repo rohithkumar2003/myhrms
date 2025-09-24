@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend/updated backend/updated backend/bk
+    container_name: hrms-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/hrmsdb
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: root
+    depends_on:
+      - db
+
+  frontend:
+    build: ./frontend/hrms-master/hrms-master
+    container_name: hrms-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  db:
+    image: mysql:8
+    container_name: hrms-mysql
+    restart: always
+    environment:
+      MYSQL_DATABASE: hrmsdb
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"   # host:container
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  db_data:

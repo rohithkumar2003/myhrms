@@ -1,0 +1,25 @@
+# ---------- BUILD STAGE ----------
+FROM eclipse-temurin:17-jdk-alpine as build
+WORKDIR /app
+
+# Copy Maven files and download dependencies
+COPY pom.xml .
+COPY mvnw .
+COPY .mvn .mvn
+RUN ./mvnw dependency:go-offline
+
+# Copy source code and build
+COPY src src
+RUN ./mvnw clean package -DskipTests
+
+# ---------- RUN STAGE ----------
+FROM eclipse-temurin:17-jre-alpine
+WORKDIR /app
+
+# Copy built jar
+COPY --from=build /app/target/*.jar app.jar
+
+# Run the app
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+EXPOSE 8080
